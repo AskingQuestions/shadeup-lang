@@ -1,0 +1,21 @@
+[package]
+name = "parser"
+version = "0.1.0"
+edition = "2021"
+
+[build-dependencies]
+lalrpop = "0.19.7"
+
+[dependencies]
+lalrpop-util = { version = "0.19.7", features = ["lexer"] }
+regex = "1"
+logos = "0.12.1"
+colored = "2.0.0"
+wasm-bindgen = { version = "0.2.63", optional = true }
+logos-nom-bridge = "0.1.0"
+nom = "7.1.1"
+chumsky = "0.8.0"
+ariadne = "0.1.5"
+
+[features]
+wasm = ["wasm-bindgen"]

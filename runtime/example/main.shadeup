@@ -1,0 +1,46 @@
+import Cube from "geometry";
+
+struct MyStuff {
+	float3 position;
+	float3 extra;
+}
+
+shader MyCoolPixelShader(myvar: float3) {
+	$out = myvar.xyzw;
+}
+
+main {
+	let factor = 2.0;
+
+	let x = MyStuff {
+		position: (1, 2, 3),
+		extra: (4, 5, 6)
+	};
+
+	let func = (s: MyStuff) -> float3 {
+		return s.position + s.extra;
+	};
+
+	let out = func(s);
+	
+	let pixel = shader {
+		let color = (1, $uv.xy);
+
+		$out = color * factor;
+	};
+
+	let something = (1, 2, 3);
+
+	draw(Cube, pixel);
+	draw(Cube.translate(1, 2, 3), MyCoolPixelShader(2));
+}
+
+// Output code pseudo code
+let pixel = new ShaderDesc(id35325, {
+	factor: factor
+})
+
+draw({
+	geometry: Cube,
+	shader: pixel
+})

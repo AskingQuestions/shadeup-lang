@@ -1,0 +1,119 @@
+import QuadraticBezier as qbez from "bezier";
+import Simplex from "noise";
+import Random from "random";
+
+struct Object {
+	pos: float3,
+	vel: float3,
+}
+
+impl Object {
+	static pub fn new(pos: float3, vel: float3) -> Object {
+		return Object {
+			pos,
+			vel,
+		};
+	}
+
+	static pub fn newHeap(pos: float3, vel: float3) -> Object* {
+		return new Object {
+			pos,
+			vel,
+		};
+	}
+}
+
+fn MyShader(Buffer<uint3> buf) -> Shader {
+	return shader {
+		// buf is being written to so we need a UAV
+		buf[0] = Simplex((2, 4, 5));
+	};
+}
+
+fn MyShaderReader(Buffer<uint3> buf) -> Shader {
+	return shader {
+		// buf is being read from so we need an SRV
+		let x = buf[0];
+	};
+}
+
+fn calc(a: Object) -> float3 {
+	let b = new Buffer<uint3>(1);
+	MyShader(b).dispatch(1, 1, 1);
+	MyShaderReader(b).dispatch(1, 1, 1);
+	delete b;
+}
+
+fn indirectCalc() {
+	let instances = new Buffer<Object>(1000);
+	let args = IndirectArgs {};
+
+	for (let [i, obj] in instances) {
+		obj.pos = Simplex((i, 0, 0)).xyz * (1, 0, 0) * 400;
+		obj.vel = Random::direction();
+	}
+
+	(shader {
+		let i = $id.x;
+		
+		instances[i].pos += instances[i].vel;
+
+		if (instances[i].pos.z < -10) {
+			// Kill the object
+		}else{
+			InterlockedAdd(args.count);
+		}
+	}).dispatch(instances.length, 1, 1);
+
+	(shader {
+		
+	}).dispatchIndirect(args);
+}
+
+main {
+	let a = Object::new((1, 2, 3), (4, 5, 6));
+	let b = Object::newHeap((1, 2, 3), (4, 5, 6));
+	a.pos.x;
+	b->pos.x;
+	let x = Object {
+		pos: (0.0, 0.0, 0.0),
+		vel: (0.0, 0.0, 0.0),
+	};
+
+	let y = Object {
+		pos: (0.0, 0.0, 0.0),
+		vel: (0.0, 0.0, 0.0),
+	};
+
+	calc(x, (shader(t: uint3) {
+
+	})(t));
+
+	let shd = shader(t: uint3) {};
+	typeof shd; // Shader<uint3>
+
+	let binded = shd((1, 2, 3));
+	typeof binded; // ShaderInstance
+
+	/*
+	binded == {
+		attributes: [
+			{
+				name: "t",
+				type: uint3,
+				value: (1, 2, 3),
+			},
+		],
+		shader: __t532gsd,
+	}
+	*/
+
+	binded.bind("t", (1, 2, 3));
+
+	binded.dispatch();
+
+	x; // Local
+	y; // Local
+	Object; // Global
+	qbez; // Global
+}

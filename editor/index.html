@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script defer type="module" src="src/client.ts"></script>
+    <style>
+      html,
+      body {
+        padding: 0;
+        margin: 0;
+        height: 100%;
+        background-color: #1e1e1e;
+        overflow: hidden;
+      }
+    </style>
+  </head>
+
+  <body>
+    <div id="container" style="width: 100%; height: 80%"></div>
+    <div
+      id="console"
+      style="
+        display: flex;
+        flex-direction: column;
+        padding: 1rem;
+        color: rgb(119, 119, 119);
+        overflow: auto;
+        width: 100%;
+        height: 20%;
+      "
+    ></div>
+  </body>
+</html>
