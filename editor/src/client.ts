@@ -76,16 +76,12 @@ monaco.languages.register({
 });
 
 // create Monaco editor
-const editorText = `fn test() {
-  let x = (1.f)
-  test;
-}
-`;
+const editorText = `import test from "test";`;
 let ed = monaco.editor.create(document.getElementById("container")!, {
   model: monaco.editor.createModel(
     editorText,
     "shadeup",
-    monaco.Uri.parse("inmemory://model.shadeup")
+    monaco.Uri.parse("model.shadeup")
   ),
   theme: "vs-dark",
   glyphMargin: true,
@@ -135,7 +131,7 @@ let env = new ShadeupEnvironment();
 env.load();
 
 function updateAlerts() {
-  let alerts = env.getAlerts("inmemory://model.shadeup");
+  let alerts = [...env.files.keys()].map((k) => env.getAlerts(k)).flat();
   monaco.editor.setModelMarkers(ed.getModel(), "shadeup", [
     ...alerts.map((e) => {
       const ansi_up = new AnsiUp();
@@ -167,15 +163,15 @@ function updateAlerts() {
 
 (async () => {
   await env.loaded();
-  env.updateFile("inmemory://model.shadeup", ed.getValue());
-  env.evaluate("inmemory://model.shadeup");
+  env.updateFile("model.shadeup", ed.getValue());
+  env.evaluate("model.shadeup");
 
   updateAlerts();
 
   ed.onDidChangeModelContent((e) => {
     let now = performance.now();
-    env.updateFile("inmemory://model.shadeup", ed.getValue() + "\n");
-    env.evaluate("inmemory://model.shadeup");
+    env.updateFile("model.shadeup", ed.getValue() + "\n");
+    env.evaluate("model.shadeup");
 
     updateAlerts();
     console.log(`took ${performance.now() - now}ms`);

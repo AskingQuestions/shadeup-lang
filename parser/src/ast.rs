@@ -12,14 +12,19 @@ pub type Span = std::ops::Range<usize>;
 #[cfg_attr(feature = "wasm", wasm_bindgen)]
 pub struct USizeTuple(pub usize, pub usize);
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Clone)]
 #[cfg_attr(feature = "wasm", wasm_bindgen)]
 pub struct Location {
-    pub file: usize,
+    file: String,
     pub span: USizeTuple,
 }
 
+#[cfg_attr(feature = "wasm", wasm_bindgen)]
 impl Location {
+    pub fn new(file: String, span: USizeTuple) -> Location {
+        Location { file, span }
+    }
+
     pub fn get_line_and_column(&self, source: &str, loc: usize) -> USizeTuple {
         let mut line = 1;
         let mut line_start = 0;
@@ -41,6 +46,11 @@ impl Location {
 
     pub fn get_end_line_and_column(&self, source: &str) -> USizeTuple {
         self.get_line_and_column(source, self.span.1)
+    }
+
+    #[cfg_attr(feature = "wasm", wasm_bindgen(getter))]
+    pub fn file(&self) -> String {
+        self.file.clone()
     }
 }
 

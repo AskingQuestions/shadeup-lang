@@ -22,7 +22,9 @@ export default class ShadeupEnvironment {
     this.mod = exp;
     console.log(exp);
     this.env = exp.make_environment();
-    console.log(this.env);
+
+    this.updateFile("test", "fn test() {}");
+    this.evaluate("test");
   }
 
   loaded() {

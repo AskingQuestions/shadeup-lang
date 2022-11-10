@@ -1,4 +1,4 @@
-use ariadne::{Color, Fmt, Label, Report, ReportKind, Source};
+use ariadne::{Color, ColorGenerator, Fmt, Label, Report, ReportKind, Source};
 use chumsky::combinator::Repeated;
 use chumsky::{prelude::*, stream::Stream};
 use std::io::{BufWriter, Write};
@@ -622,14 +622,23 @@ fn block_parser() -> impl Parser<Token, Vec<ast::Root>, Error = Simple<Token>> +
                     ))
                 });
 
+            let op = just(Token::Op(Op::Dot)).to(Op::Dot);
+            let dot = call
+                .clone()
+                .then(op.then(call).repeated())
+                .foldl(|a, (op, b)| {
+                    let span = a.get_span().start..b.get_span().end;
+                    ast::Expression::Op((Box::new(a), op, Box::new(b), span))
+                });
+
             // Product ops (multiply and divide) have equal precedence
             let op = just(Token::Op(Op::Mul))
                 .to(Op::Mul)
                 .or(just(Token::Op(Op::Div)).to(Op::Div))
                 .or(just(Token::Op(Op::Sq)).to(Op::Sq));
-            let product = call
+            let product = dot
                 .clone()
-                .then(op.then(call).repeated())
+                .then(op.then(dot).repeated())
                 .foldl(|a, (op, b)| {
                     let span = a.get_span().start..b.get_span().end;
                     ast::Expression::Op((Box::new(a), op, Box::new(b), span))
@@ -833,17 +842,16 @@ pub struct ParseError {
     pub simple_msg: String,
 }
 
-pub fn parse(src: &str) -> Vec<ParseError> {
+pub fn parse(file_name: String, src: &str) -> (Option<Vec<ast::Root>>, Vec<ParseError>) {
     let (tokens, mut errs) = lexer().parse_recovery(src);
 
-    let parse_errs = if let Some(tokens) = tokens {
+    let (ast, parse_errs) = if let Some(tokens) = tokens {
         //dbg!(tokens);
         let len = src.chars().count();
         let (ast, parse_errs) = block_parser()
             .then_ignore(end())
             .parse_recovery(Stream::from_iter(len..len + 1, tokens.into_iter()));
 
-        dbg!(ast);
         // if let Some(funcs) = ast.filter(|_| errs.len() + parse_errs.len() == 0) {
         //     if let Some(main) = funcs.get("main") {
         //         assert_eq!(main.args.len(), 0);
@@ -856,9 +864,9 @@ pub fn parse(src: &str) -> Vec<ParseError> {
         //     }
         // }
 
-        parse_errs
+        (ast, parse_errs)
     } else {
-        Vec::new()
+        (None, vec![])
     };
 
     let mut err = Vec::<ParseError>::new();
@@ -867,7 +875,9 @@ pub fn parse(src: &str) -> Vec<ParseError> {
         .map(|e| e.map(|c| c.to_string()))
         .chain(parse_errs.into_iter().map(|e| e.map(|tok| tok.to_string())))
         .for_each(|e| {
-            let report = Report::build(ReportKind::Error, (), e.span().start);
+            let s: &str = &file_name;
+
+            let report = Report::build(ReportKind::Error, s, 1);
 
             let report = match e.reason() {
                 chumsky::error::SimpleReason::Unclosed { span, delimiter } => report
@@ -876,7 +886,7 @@ pub fn parse(src: &str) -> Vec<ParseError> {
                         delimiter.fg(Color::Yellow)
                     ))
                     .with_label(
-                        Label::new(span.clone())
+                        Label::new((s, span.clone()))
                             .with_message(format!(
                                 "Unclosed delimiter {}",
                                 delimiter.fg(Color::Yellow)
@@ -884,7 +894,7 @@ pub fn parse(src: &str) -> Vec<ParseError> {
                             .with_color(Color::Yellow),
                     )
                     .with_label(
-                        Label::new(e.span())
+                        Label::new((s, span.clone()))
                             .with_message(format!(
                                 "Must be closed before this {}",
                                 e.found()
@@ -914,7 +924,7 @@ pub fn parse(src: &str) -> Vec<ParseError> {
                         }
                     ))
                     .with_label(
-                        Label::new(e.span())
+                        Label::new((s, e.span().clone()))
                             .with_message(format!(
                                 "Unexpected token {}",
                                 e.found()
@@ -924,7 +934,7 @@ pub fn parse(src: &str) -> Vec<ParseError> {
                             .with_color(Color::Red),
                     ),
                 chumsky::error::SimpleReason::Custom(msg) => report.with_message(msg).with_label(
-                    Label::new(e.span())
+                    Label::new((s, e.span().clone()))
                         .with_message(format!("{}", msg.fg(Color::Red)))
                         .with_color(Color::Red),
                 ),
@@ -963,8 +973,8 @@ pub fn parse(src: &str) -> Vec<ParseError> {
             let mut output = BufWriter::new(Vec::new());
             report
                 .finish()
-                // .write(Source::from(&src), &mut output)
-                .print(Source::from(&src))
+                .write((s, Source::from(&src)), &mut output)
+                // .print(Source::from(&src))
                 .unwrap();
 
             let output_str = str::from_utf8(output.by_ref().buffer()).unwrap().to_owned();
@@ -976,5 +986,5 @@ pub fn parse(src: &str) -> Vec<ParseError> {
             });
         });
 
-    err
+    (ast, err)
 }
