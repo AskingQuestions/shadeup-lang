@@ -127,11 +127,12 @@ fn lexer() -> impl Parser<char, Vec<(Token, Span)>, Error = Simple<char>> {
         just('/').to(Op::Div),
         // 0th order
         just('%').to(Op::Rem),
+        just('?').to(Op::Question),
     ))
     .map(Token::Op);
 
     // A parser for control characters (delimiters, semicolons, etc.)
-    let ctrl = one_of("()[]{};,").map(|c| Token::Ctrl(c));
+    let ctrl = one_of("()[]{};,:").map(|c| Token::Ctrl(c));
 
     // A parser for identifiers and keywords
     let ident = text::ident().map(|ident: String| match ident.as_str() {
@@ -149,7 +150,6 @@ fn lexer() -> impl Parser<char, Vec<(Token, Span)>, Error = Simple<char>> {
         "shader" => Token::Shader,
         "struct" => Token::Struct,
         "main" => Token::Main,
-        "shader" => Token::Shader,
         "pub" => Token::Pub,
 
         _ => Token::Ident(ident),
@@ -560,13 +560,48 @@ fn block_parser() -> impl Parser<Token, Vec<ast::Root>, Error = Simple<Token>> +
                 .delimited_by(just(Token::Ctrl('[')), just(Token::Ctrl(']')))
                 .map_with_span(|list, span| ast::Expression::List((list, span)));
 
+            let tuple = items
+                .clone()
+                .delimited_by(just(Token::Ctrl('(')), just(Token::Ctrl(')')))
+                .map_with_span(|tuple, span| ast::Expression::Tuple((tuple, span)));
+
+            let struct_key_val_list = identifier
+                .clone()
+                .then_ignore(just(Token::Ctrl(':')))
+                .then(expr.clone())
+                .map(|(key, val)| (key, Box::new(val)))
+                .separated_by(just(Token::Ctrl(',')))
+                .allow_trailing();
+
+            let struct_def = identifier
+                .clone()
+                .then(
+                    struct_key_val_list
+                        .clone()
+                        .delimited_by(just(Token::Ctrl('{')), just(Token::Ctrl('}'))),
+                )
+                .map_with_span(|(name, fields), span| {
+                    ast::Expression::StructInstance((name, fields, span))
+                })
+                .recover_with(nested_delimiters(
+                    Token::Ctrl('{'),
+                    Token::Ctrl('}'),
+                    [
+                        (Token::Ctrl('('), Token::Ctrl(')')),
+                        (Token::Ctrl('['), Token::Ctrl(']')),
+                    ],
+                    |span| ast::Expression::Error(((), span)),
+                ));
+
             // 'Atoms' are expressions that contain no ambiguity
             let atom = val
                 .map_with_span(|val, span| ast::Expression::Value((val, span)))
+                .or(struct_def)
                 .or(identifier
                     .clone()
                     .map(|id| ast::Expression::Identifier((id.clone(), id.span))))
                 .or(list)
+                .or(tuple)
                 .or(shader_or_main_block.clone().map_with_span(|block, span| {
                     ast::Expression::InlineBlock((
                         match block {
@@ -658,7 +693,7 @@ fn block_parser() -> impl Parser<Token, Vec<ast::Root>, Error = Simple<Token>> +
 
             // Comparison ops (equal, not-equal) have equal precedence
             let op = just(Token::Op(Op::EqEq))
-                .to(Op::Eq)
+                .to(Op::EqEq)
                 .or(just(Token::Op(Op::NotEq)).to(Op::NotEq))
                 .or(just(Token::Op(Op::Less)).to(Op::Less))
                 .or(just(Token::Op(Op::LessEq)).to(Op::LessEq))
@@ -672,6 +707,37 @@ fn block_parser() -> impl Parser<Token, Vec<ast::Root>, Error = Simple<Token>> +
                     ast::Expression::Op((Box::new(a), op, Box::new(b), span))
                 });
 
+            // let op = just(Token::Op(Op::Question)).to(Op::Question);
+            // let ternary = compare
+            //     .clone()
+            //     .then(
+            //         op.ignore_then(compare.clone())
+            //             .then_ignore(just(Token::Ctrl(':')))
+            //             .then(compare.clone())
+            //             .repeated(),
+            //     )
+            //     .foldl(|a, (b, c)| {
+            //         let span = a.get_span().start..c.get_span().end;
+            //         ast::Expression::Ternary((Box::new(a), Box::new(b), Box::new(c), span.clone()))
+            //     });
+            // .map_with_span(|(a, tern), span| match tern {
+            //     Some((b, c)) => {
+            //         ast::Expression::Ternary((Box::new(a), Box::new(b), Box::new(c), span))
+            //     }
+            //     None => a,
+            // });
+
+            // let ternary = compare
+            //     .clone()
+            //     .then(op.then(compare).repeated())
+            //     .foldl(|a, (op, b)| {
+            //         let span = a.get_span().start..b.get_span().end;
+            //         ast::Expression::Op((Box::new(a), op, Box::new(b), span))
+            //     });
+
+            // Ternary operator pushes us just past the stack size
+            let ternary = compare;
+
             let op = just(Token::Op(Op::Eq))
                 .to(Op::Eq)
                 .or(just(Token::Op(Op::PlusEq)).to(Op::PlusEq))
@@ -681,9 +747,9 @@ fn block_parser() -> impl Parser<Token, Vec<ast::Root>, Error = Simple<Token>> +
                 .or(just(Token::Op(Op::RFlow)).to(Op::RFlow))
                 .or(just(Token::Op(Op::LArrow)).to(Op::LArrow))
                 .or(just(Token::Op(Op::RArrow)).to(Op::RArrow));
-            let assign = compare
+            let assign = ternary
                 .clone()
-                .then(op.then(compare).repeated())
+                .then(op.then(ternary).repeated())
                 .foldl(|a, (op, b)| {
                     let span = a.get_span().start..b.get_span().end;
                     ast::Expression::Op((Box::new(a), op, Box::new(b), span))
@@ -692,16 +758,29 @@ fn block_parser() -> impl Parser<Token, Vec<ast::Root>, Error = Simple<Token>> +
             assign
         });
 
-        let args = ident
+        let args = identifier
             .clone()
+            .then_ignore(just(Token::Ctrl(':')))
+            .then(identifier.clone())
+            .then(
+                just(Token::Op(Op::Eq))
+                    .ignore_then(expression.clone())
+                    .or_not(),
+            )
             .separated_by(just(Token::Ctrl(',')))
             .allow_trailing()
             .delimited_by(just(Token::Ctrl('(')), just(Token::Ctrl(')')))
-            .labelled("function args");
+            .labelled("function args")
+            .map(|args| {
+                args.into_iter()
+                    .map(|((name, ty), default)| (name, ty, default))
+                    .collect()
+            });
 
         let func = just(Token::Fn)
             .ignore_then(identifier.labelled("function name"))
             .then(args)
+            .then(just(Token::Op(Op::RArrow)).ignore_then(identifier).or_not())
             .then(
                 block_recur
                     .clone()
@@ -724,17 +803,21 @@ fn block_parser() -> impl Parser<Token, Vec<ast::Root>, Error = Simple<Token>> +
                                     roots: vec![],
                                     span: span.clone(),
                                 },
+                                parameters: vec![],
+                                return_type: None,
                                 span,
                             })]
                         },
                     )),
             )
-            .map_with_span(|((name, args), body), span| {
+            .map_with_span(|(((name, args), return_type), body), span| {
                 ast::Root::Function(ast::Function {
                     body: ast::Block {
                         roots: body,
                         span: span.clone(),
                     },
+                    parameters: args,
+                    return_type,
                     name: name,
                     span,
                 })

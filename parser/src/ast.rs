@@ -78,6 +78,8 @@ pub struct StringLiteral {
 pub struct Function {
     pub name: Identifier,
     pub body: Block,
+    pub parameters: Vec<(Identifier, Identifier, Option<Expression>)>,
+    pub return_type: Option<Identifier>,
     pub span: Span,
 }
 
@@ -109,10 +111,13 @@ pub enum Value {
 pub enum Expression {
     Identifier((Identifier, Span)),
     List((Vec<Expression>, Span)),
+    Tuple((Vec<Expression>, Span)),
     Value((Value, Span)),
     Call((Call, Span)),
+    Ternary((Box<Expression>, Box<Expression>, Box<Expression>, Span)),
     Op((Box<Expression>, Op, Box<Expression>, Span)),
     InlineBlock((Block, Span)),
+    StructInstance((Identifier, Vec<(Identifier, Box<Expression>)>, Span)),
     Error(((), Span)),
 }
 
@@ -126,6 +131,9 @@ impl Expression {
             Expression::Op((_, _, _, span)) => span.clone(),
             Expression::Error((_, span)) => span.clone(),
             Expression::InlineBlock((_, span)) => span.clone(),
+            Expression::Ternary((_, _, _, span)) => span.clone(),
+            Expression::Tuple((_, span)) => span.clone(),
+            Expression::StructInstance((_, _, span)) => span.clone(),
         }
     }
 }
@@ -161,6 +169,7 @@ pub enum Op {
     Rem,
     PlusEq,
     MinusEq,
+    Question,
     Sq,
 }
 
@@ -190,6 +199,7 @@ impl fmt::Display for Op {
             Op::MinusEq => write!(f, "-="),
             Op::SubSub => write!(f, "--"),
             Op::Sq => write!(f, "**"),
+            Op::Question => write!(f, "?"),
         }
     }
 }

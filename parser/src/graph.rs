@@ -1,26 +1,26 @@
 #[cfg(feature = "wasm")]
 use wasm_bindgen::prelude::*;
 
-use crate::ast::{self, Location, Span, USizeTuple};
+use crate::ast::{self, Expression, Location, Span, USizeTuple};
 use crate::printer::SpannedAlert;
 use std::collections::HashMap;
 
-type SymbolRef = (String, String);
+type SymbolRef = String;
 
 #[derive(Debug, Clone)]
 pub struct SymbolFunction {
-    parameters: Vec<SymbolRef>,
-    return_type: SymbolRef,
+    pub parameters: Vec<(String, SymbolRef, bool)>,
+    pub return_type: Option<SymbolRef>,
 }
 
 #[derive(Debug, Clone)]
 pub struct SymbolType {
-    fields: Vec<(String, SymbolRef)>,
+    pub fields: Vec<(String, SymbolRef)>,
 }
 
 #[derive(Debug, Clone)]
 pub struct SymbolConstant {
-    value_type: SymbolRef,
+    pub value_type: SymbolRef,
 }
 
 #[derive(Debug, Clone)]
@@ -34,15 +34,15 @@ pub enum SymbolDefinition {
 pub struct SymbolNode {
     pub name: String,
     pub definition: SymbolDefinition,
-    // pub root: ast::Root,
+    pub root: ast::Root,
     pub file: String,
     pub span: Span,
 }
 
 pub struct SymbolGraph {
     // file_name -> symbol_name -> symbol_node
-    files: HashMap<String, HashMap<String, SymbolNode>>,
-    primitive: HashMap<String, SymbolNode>,
+    pub files: HashMap<String, HashMap<String, SymbolNode>>,
+    pub primitive: HashMap<String, SymbolNode>,
 }
 
 impl SymbolGraph {
@@ -66,6 +66,7 @@ impl SymbolGraph {
                         definition: SymbolDefinition::Type(SymbolType { fields: Vec::new() }),
                         file: "primitives".to_string(),
                         span: Span { start: 0, end: 0 },
+                        root: ast::Root::Error,
                     },
                 )
             };
@@ -92,6 +93,8 @@ impl SymbolGraph {
         add_primitive!("bool");
         add_primitive!("string");
         add_primitive!("byte");
+        add_primitive!("array");
+        add_primitive!("map");
         add_primitive!("void");
     }
 
@@ -188,7 +191,7 @@ impl SymbolGraph {
                             name,
                             SymbolNode {
                                 file: file_name.to_owned(),
-                                // root: ast::Root::Struct(struct_.clone()),
+                                root: ast::Root::Struct(struct_.clone()),
                                 definition: SymbolDefinition::Type(SymbolType {
                                     fields: Vec::new(),
                                 }),
@@ -198,7 +201,7 @@ impl SymbolGraph {
                         );
                     }
                 }
-                ast::Root::Function(function) => {
+                ast::Root::Function(ref function) => {
                     let name = function.name.name.clone();
                     if hmap.contains_key(name.as_str()) {
                         alert_already_defined!(
@@ -213,10 +216,20 @@ impl SymbolGraph {
                             name,
                             SymbolNode {
                                 file: file_name.to_owned(),
-                                // root: ast::Root::Function(function.clone()),
+                                root: ast::Root::Function(function.clone()),
                                 definition: SymbolDefinition::Function(SymbolFunction {
-                                    parameters: Vec::new(),
-                                    return_type: ("".to_owned(), "void".to_owned()),
+                                    parameters: function
+                                        .parameters
+                                        .iter()
+                                        .map(|p| {
+                                            (p.0.name.clone(), p.1.name.clone(), p.2.is_some())
+                                        })
+                                        .collect(),
+                                    return_type: if function.return_type.is_none() {
+                                        None
+                                    } else {
+                                        Some(function.return_type.clone().unwrap().name.clone())
+                                    },
                                 }),
                                 name: function.name.name.clone(),
                                 span: function.name.span.clone(),

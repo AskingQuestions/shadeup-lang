@@ -4,6 +4,7 @@ pub mod ast;
 pub mod graph;
 pub mod parser2;
 pub mod printer;
+pub mod validator;
 
 use std::str;
 
@@ -136,10 +137,12 @@ impl Environment {
 
         if ast.is_some() {
             let ast_ref = ast.as_ref().unwrap();
-            let mut graph_errors = self.graph.update_file_first_pass(name, ast_ref);
-            graph_errors.extend(self.graph.update_file_second_pass(name, ast_ref));
+            let mut validation_errors = self.graph.update_file_first_pass(name, ast_ref);
+            validation_errors.extend(self.graph.update_file_second_pass(name, ast_ref));
 
-            for err in graph_errors {
+            validation_errors.extend(validator::validate(&self.graph, name));
+
+            for err in validation_errors {
                 let (pretty_msg, simple_msg) =
                     if err.other_message.is_some() && err.other_location.is_some() {
                         (
