@@ -28,8 +28,9 @@ enum Token {
     Main,
     Pub,
     Let,
-    Print,
+    Return,
     If,
+    Impl,
     Else,
 }
 
@@ -46,7 +47,7 @@ impl fmt::Display for Token {
             Token::Ident(s) => write!(f, "{}", s),
             Token::Fn => write!(f, "fn"),
             Token::Let => write!(f, "let"),
-            Token::Print => write!(f, "print"),
+            Token::Return => write!(f, "return"),
             Token::If => write!(f, "if"),
             Token::Else => write!(f, "else"),
             Token::As => write!(f, "as"),
@@ -54,6 +55,7 @@ impl fmt::Display for Token {
             Token::Import => write!(f, "import"),
             Token::Shader => write!(f, "shader"),
             Token::Struct => write!(f, "struct"),
+            Token::Impl => write!(f, "impl"),
             Token::Main => write!(f, "main"),
             Token::Pub => write!(f, "pub"),
         }
@@ -138,7 +140,7 @@ fn lexer() -> impl Parser<char, Vec<(Token, Span)>, Error = Simple<char>> {
     let ident = text::ident().map(|ident: String| match ident.as_str() {
         "fn" => Token::Fn,
         "let" => Token::Let,
-        "print" => Token::Print,
+        "return" => Token::Return,
         "if" => Token::If,
         "else" => Token::Else,
         "true" => Token::Bool(true),
@@ -151,6 +153,7 @@ fn lexer() -> impl Parser<char, Vec<(Token, Span)>, Error = Simple<char>> {
         "struct" => Token::Struct,
         "main" => Token::Main,
         "pub" => Token::Pub,
+        "impl" => Token::Impl,
 
         _ => Token::Ident(ident),
     });
@@ -184,15 +187,15 @@ impl std::fmt::Display for Value {
             Self::Int(x) => write!(f, "{}", x),
             Self::Real(x) => write!(f, "{}", x),
             Self::Str(x) => write!(f, "{}", x),
-            Self::List(xs) => write!(
-                f,
-                "[{}]",
-                xs.iter()
-                    .map(|x| x.to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ),
-            Self::Func(name) => write!(f, "<function: {}>", name),
+            // Self::List(xs) => write!(
+            //     f,
+            //     "[{}]",
+            //     xs.iter()
+            //         .map(|x| x.to_string())
+            //         .collect::<Vec<_>>()
+            //         .join(", ")
+            // ),
+            // Self::Func(name) => write!(f, "<function: {}>", name),
         }
     }
 }
@@ -275,13 +278,13 @@ fn expr_parser() -> impl Parser<Token, Spanned<Expr>, Error = Simple<Token>> + C
                 .or(ident.map(Expr::Local))
                 .or(let_)
                 .or(list)
-                // In Nano Rust, `print` is just a keyword, just like Python 2, for simplicity
-                .or(just(Token::Print)
-                    .ignore_then(
-                        expr.clone()
-                            .delimited_by(just(Token::Ctrl('(')), just(Token::Ctrl(')'))),
-                    )
-                    .map(|expr| Expr::Print(Box::new(expr))))
+                // // In Nano Rust, `print` is just a keyword, just like Python 2, for simplicity
+                // .or(just(Token::Print)
+                //     .ignore_then(
+                //         expr.clone()
+                //             .delimited_by(just(Token::Ctrl('(')), just(Token::Ctrl(')'))),
+                //     )
+                //     .map(|expr| Expr::Print(Box::new(expr))))
                 .map_with_span(|expr, span| (expr, span))
                 // Atoms can also just be normal expressions, but surrounded with parentheses
                 .or(expr
@@ -826,7 +829,7 @@ fn block_parser() -> impl Parser<Token, Vec<ast::Root>, Error = Simple<Token>> +
 
         let let_start = identifier
             .labelled("let identifier")
-            .then_ignore(just(Token::Op(Op::Eq)))
+            .then_ignore(just(Token::Ctrl(':')))
             .then(identifier.clone())
             .map(|(id, ty)| (id, Some(ty)))
             .or(identifier.labelled("let identifier").map(|id| (id, None)));
@@ -850,6 +853,60 @@ fn block_parser() -> impl Parser<Token, Vec<ast::Root>, Error = Simple<Token>> +
             })
             .labelled("let");
 
+        let _impl = just(Token::Impl)
+            .ignore_then(identifier.labelled("impl name"))
+            .then(
+                func.clone()
+                    .repeated()
+                    .delimited_by(just(Token::Ctrl('{')), just(Token::Ctrl('}')))
+                    // Attempt to recover anything that looks like a function body but contains errors
+                    .recover_with(nested_delimiters(
+                        Token::Ctrl('{'),
+                        Token::Ctrl('}'),
+                        [
+                            (Token::Ctrl('('), Token::Ctrl(')')),
+                            (Token::Ctrl('['), Token::Ctrl(']')),
+                        ],
+                        |span: Span| vec![],
+                    )),
+            )
+            .map_with_span(|(name, body), span| ast::Root::Impl(ast::Impl { name, body, span }))
+            .labelled("impl");
+
+        let _return = just(Token::Return)
+            .ignore_then(expression.clone().labelled("return value").or_not())
+            .then_ignore(just(Token::Ctrl(';')))
+            .map_with_span(|expr, span| ast::Root::Return(ast::Return { value: expr, span }))
+            .labelled("return");
+
+        let _struct_field = identifier
+            .clone()
+            .then_ignore(just(Token::Ctrl(':')))
+            .then(identifier);
+
+        let _struct = just(Token::Struct)
+            .ignore_then(identifier.labelled("struct name"))
+            .then(
+                _struct_field
+                    .clone()
+                    .repeated()
+                    .delimited_by(just(Token::Ctrl('{')), just(Token::Ctrl('}')))
+                    // Attempt to recover anything that looks like a function body but contains errors
+                    .recover_with(nested_delimiters(
+                        Token::Ctrl('{'),
+                        Token::Ctrl('}'),
+                        [
+                            (Token::Ctrl('('), Token::Ctrl(')')),
+                            (Token::Ctrl('['), Token::Ctrl(']')),
+                        ],
+                        |_| vec![],
+                    )),
+            )
+            .map_with_span(|(name, fields), span| {
+                ast::Root::Struct(ast::Struct { name, fields, span })
+            })
+            .labelled("struct");
+
         // let let_ = just(Token::Let)
         //     .ignore_then(identifier)
         //     .then_ignore(just(Token::Op(Op::Eq)))
@@ -867,10 +924,13 @@ fn block_parser() -> impl Parser<Token, Vec<ast::Root>, Error = Simple<Token>> +
         let expression_statement = expression
             .clone()
             .then_ignore(just(Token::Ctrl(';')))
-            .map_with_span(|expr, span| ast::Root::Expression(expr));
+            .map(|expr| ast::Root::Expression(expr));
 
         shader_or_main_block
             .or(_let)
+            .or(_return)
+            .or(_struct)
+            .or(_impl)
             .or(func)
             .or(import.clone().map(|imp| ast::Root::Import(imp)))
             .or(expression_statement)

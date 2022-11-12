@@ -84,6 +84,13 @@ pub struct Function {
 }
 
 #[derive(Debug, Clone)]
+pub struct Impl {
+    pub name: Identifier,
+    pub body: Vec<Root>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
 pub enum Root {
     Import(Import),
     Function(Function),
@@ -91,9 +98,61 @@ pub enum Root {
     Shader(Block),
     Expression(Expression),
     Struct(Struct),
+    Impl(Impl),
     If(If),
     Let(Let),
+    Return(Return),
     Error,
+}
+
+impl Root {
+    pub fn get_name(&self) -> Option<String> {
+        match self {
+            Root::Import(_) => None,
+            Root::Function(f) => Some(f.name.name.clone()),
+            Root::Main(_) => Some("main".to_string()),
+            Root::Shader(_) => Some("shader".to_string()),
+            Root::Expression(_) => None,
+            Root::Struct(s) => Some(s.name.name.clone()),
+            Root::Impl(i) => Some(i.name.name.clone()),
+            Root::If(_) => None,
+            Root::Let(l) => Some(l.name.name.clone()),
+            Root::Return(_) => None,
+            Root::Error => None,
+        }
+    }
+
+    pub fn get_kind(&self) -> &str {
+        match self {
+            Root::Import(_) => "import",
+            Root::Function(_) => "function",
+            Root::Main(_) => "main",
+            Root::Shader(_) => "shader",
+            Root::Expression(_) => "expression",
+            Root::Struct(_) => "struct",
+            Root::Impl(_) => "impl",
+            Root::If(_) => "if",
+            Root::Let(_) => "let",
+            Root::Return(_) => "return",
+            Root::Error => "error",
+        }
+    }
+
+    pub fn get_span(&self) -> Span {
+        match self {
+            Root::Import(i) => i.path.span.clone(),
+            Root::Function(f) => f.span.clone(),
+            Root::Main(b) => b.span.clone(),
+            Root::Shader(b) => b.span.clone(),
+            Root::Expression(e) => e.get_span(),
+            Root::Struct(s) => s.span.clone(),
+            Root::Impl(i) => i.span.clone(),
+            Root::If(i) => i.span.clone(),
+            Root::Let(l) => l.span.clone(),
+            Root::Return(r) => r.span.clone(),
+            Root::Error => Span { start: 0, end: 0 },
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -103,8 +162,8 @@ pub enum Value {
     Int(i64),
     Real(f64),
     Str(String),
-    List(Vec<Value>),
-    Func(String),
+    // List(Vec<Value>),
+    // Func(String),
 }
 
 #[derive(Debug, Clone)]
@@ -204,6 +263,37 @@ impl fmt::Display for Op {
     }
 }
 
+impl Op {
+    pub fn get_code_name(&self) -> String {
+        match self {
+            Op::RFlow => "right_arrow".to_string(),
+            Op::EqEq => "equals".to_string(),
+            Op::Eq => "set_equals".to_string(),
+            Op::Ellipsis => "ellipsis".to_string(),
+            Op::Dot => "dot".to_string(),
+            Op::NotEq => "not_equals".to_string(),
+            Op::Not => "not".to_string(),
+            Op::LArrow => "left_arrow".to_string(),
+            Op::LessEq => "less_than_or_equals".to_string(),
+            Op::Less => "less_than".to_string(),
+            Op::MoreEq => "greater_than_or_equals".to_string(),
+            Op::More => "greater_than".to_string(),
+            Op::Join => "join".to_string(),
+            Op::Add => "plus".to_string(),
+            Op::RArrow => "right_arrow".to_string(),
+            Op::Sub => "minus".to_string(),
+            Op::SubSub => "minus_minus".to_string(),
+            Op::Mul => "multiply".to_string(),
+            Op::Div => "divide".to_string(),
+            Op::Rem => "modulo".to_string(),
+            Op::PlusEq => "plus_equals".to_string(),
+            Op::MinusEq => "minus_equals".to_string(),
+            Op::Sq => "double_multiply".to_string(),
+            Op::Question => "question".to_string(),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct If {
     pub condition: Expression,
@@ -223,8 +313,16 @@ pub struct Let {
 }
 
 #[derive(Debug, Clone)]
+pub struct Return {
+    pub value: Option<Expression>,
+
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
 pub struct Struct {
     pub name: Identifier,
+    pub fields: Vec<(Identifier, Identifier)>,
     pub span: Span,
 }
 

@@ -11,7 +11,18 @@ fn main() {
 
     env.set_file(
         "test.shadeup".to_owned(),
-        "fn mainf(a: inta) {}".to_string(),
+        "
+    struct Test {
+        a: int
+        b: int
+    }
+
+    fn test() {
+        let a = 1;
+        let b = a.d;
+    }
+    "
+        .to_string(),
     );
 
     let _ = env.parse_file("test.shadeup");

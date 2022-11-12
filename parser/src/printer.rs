@@ -88,6 +88,7 @@ pub struct SpannedAlert {
 }
 
 impl SpannedAlert {
+    #[allow(dead_code)]
     pub fn error(label: String, message: String, location: Location) -> Self {
         Self {
             label,
@@ -99,6 +100,7 @@ impl SpannedAlert {
         }
     }
 
+    #[allow(dead_code)]
     pub fn warning(label: String, message: String, location: Location) -> Self {
         Self {
             label,
@@ -110,6 +112,7 @@ impl SpannedAlert {
         }
     }
 
+    #[allow(dead_code)]
     pub fn info(label: String, message: String, location: Location) -> Self {
         Self {
             label,
@@ -121,6 +124,7 @@ impl SpannedAlert {
         }
     }
 
+    #[allow(dead_code)]
     pub fn error_2(
         label: String,
         message: String,
@@ -138,6 +142,7 @@ impl SpannedAlert {
         }
     }
 
+    #[allow(dead_code)]
     pub fn warning_2(
         label: String,
         message: String,
@@ -155,6 +160,7 @@ impl SpannedAlert {
         }
     }
 
+    #[allow(dead_code)]
     pub fn info_2(
         label: String,
         message: String,

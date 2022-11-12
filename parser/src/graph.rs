@@ -16,6 +16,7 @@ pub struct SymbolFunction {
 #[derive(Debug, Clone)]
 pub struct SymbolType {
     pub fields: Vec<(String, SymbolRef)>,
+    pub methods: Vec<(String, SymbolFunction)>,
 }
 
 #[derive(Debug, Clone)]
@@ -28,6 +29,16 @@ pub enum SymbolDefinition {
     Constant(SymbolConstant),
     Function(SymbolFunction),
     Type(SymbolType),
+}
+
+impl SymbolDefinition {
+    pub fn get_name(&self) -> &str {
+        match self {
+            SymbolDefinition::Constant(_) => "constant",
+            SymbolDefinition::Function(_) => "function",
+            SymbolDefinition::Type(_) => "type",
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -58,12 +69,15 @@ impl SymbolGraph {
 
     pub fn add_primitive_symbols(&mut self) {
         macro_rules! add_primitive {
-            ($name:expr) => {
+            ($name:expr, $methods:expr) => {
                 self.primitive.insert(
                     $name.to_owned(),
                     SymbolNode {
                         name: $name.to_string(),
-                        definition: SymbolDefinition::Type(SymbolType { fields: Vec::new() }),
+                        definition: SymbolDefinition::Type(SymbolType {
+                            fields: Vec::new(),
+                            methods: $methods,
+                        }),
                         file: "primitives".to_string(),
                         span: Span { start: 0, end: 0 },
                         root: ast::Root::Error,
@@ -74,12 +88,136 @@ impl SymbolGraph {
 
         macro_rules! add_scalar {
             ($name:expr) => {
-                add_primitive!($name);
-                add_primitive!(format!("{}{}", $name, "2"));
-                add_primitive!(format!("{}{}", $name, "3"));
-                add_primitive!(format!("{}{}", $name, "4"));
-                add_primitive!(format!("{}{}", $name, "3x3"));
-                add_primitive!(format!("{}{}", $name, "4x4"));
+                let base_scalar_methods = |type_name: String| {
+                    vec![
+                        (
+                            "_operator_plus".to_string(),
+                            SymbolFunction {
+                                parameters: vec![("other".to_owned(), type_name.clone(), false)],
+                                return_type: Some(type_name.clone()),
+                            },
+                        ),
+                        (
+                            "_operator_minus".to_string(),
+                            SymbolFunction {
+                                parameters: vec![("other".to_owned(), type_name.clone(), false)],
+                                return_type: Some(type_name.clone()),
+                            },
+                        ),
+                        (
+                            "_operator_divide".to_string(),
+                            SymbolFunction {
+                                parameters: vec![("other".to_owned(), type_name.clone(), false)],
+                                return_type: Some(type_name.clone()),
+                            },
+                        ),
+                        (
+                            "_operator_multiply".to_string(),
+                            SymbolFunction {
+                                parameters: vec![("other".to_owned(), type_name.clone(), false)],
+                                return_type: Some(type_name.clone()),
+                            },
+                        ),
+                        (
+                            "_operator_modulo".to_string(),
+                            SymbolFunction {
+                                parameters: vec![("other".to_owned(), type_name.clone(), false)],
+                                return_type: Some(type_name.clone()),
+                            },
+                        ),
+                        (
+                            "_operator_equals".to_string(),
+                            SymbolFunction {
+                                parameters: vec![("other".to_owned(), type_name.clone(), false)],
+                                return_type: Some("bool".to_string()),
+                            },
+                        ),
+                        (
+                            "_operator_not_equals".to_string(),
+                            SymbolFunction {
+                                parameters: vec![("other".to_owned(), type_name.clone(), false)],
+                                return_type: Some("bool".to_string()),
+                            },
+                        ),
+                        (
+                            "_operator_less_than".to_string(),
+                            SymbolFunction {
+                                parameters: vec![("other".to_owned(), type_name.clone(), false)],
+                                return_type: Some("bool".to_string()),
+                            },
+                        ),
+                        (
+                            "_operator_greater_than".to_string(),
+                            SymbolFunction {
+                                parameters: vec![("other".to_owned(), type_name.clone(), false)],
+                                return_type: Some("bool".to_string()),
+                            },
+                        ),
+                        (
+                            "_operator_less_than_or_equals".to_string(),
+                            SymbolFunction {
+                                parameters: vec![("other".to_owned(), type_name.clone(), false)],
+                                return_type: Some("bool".to_string()),
+                            },
+                        ),
+                        (
+                            "_operator_greater_than_or_equals".to_string(),
+                            SymbolFunction {
+                                parameters: vec![("other".to_owned(), type_name.clone(), false)],
+                                return_type: Some("bool".to_string()),
+                            },
+                        ),
+                    ]
+                };
+                let mutli_scalar_methods = |type_name: String, single_name: String| {
+                    vec![(
+                        "_operator_cross".to_string(),
+                        SymbolFunction {
+                            parameters: vec![("other".to_owned(), type_name.clone(), false)],
+                            return_type: Some(single_name.clone()),
+                        },
+                    )]
+                };
+                add_primitive!(
+                    $name,
+                    [
+                        vec![(
+                            "_operator_multiply".to_string(),
+                            SymbolFunction {
+                                parameters: vec![("other".to_owned(), $name.to_string(), false)],
+                                return_type: Some($name.to_string()),
+                            },
+                        )],
+                        base_scalar_methods($name.to_string())
+                    ]
+                    .concat()
+                );
+                add_primitive!(
+                    format!("{}{}", $name, "2"),
+                    [
+                        mutli_scalar_methods(format!("{}{}", $name, "2"), $name.to_string()),
+                        base_scalar_methods(format!("{}{}", $name, "2"))
+                    ]
+                    .concat()
+                );
+                add_primitive!(
+                    format!("{}{}", $name, "3"),
+                    [
+                        mutli_scalar_methods(format!("{}{}", $name, "3"), $name.to_string()),
+                        base_scalar_methods(format!("{}{}", $name, "3"))
+                    ]
+                    .concat()
+                );
+                add_primitive!(
+                    format!("{}{}", $name, "4"),
+                    [
+                        mutli_scalar_methods(format!("{}{}", $name, "4"), $name.to_string()),
+                        base_scalar_methods(format!("{}{}", $name, "4"))
+                    ]
+                    .concat()
+                );
+                add_primitive!(format!("{}{}", $name, "3x3"), vec![]);
+                add_primitive!(format!("{}{}", $name, "4x4"), vec![]);
             };
         }
 
@@ -90,12 +228,15 @@ impl SymbolGraph {
         add_scalar!("float");
         add_scalar!("double");
 
-        add_primitive!("bool");
-        add_primitive!("string");
-        add_primitive!("byte");
-        add_primitive!("array");
-        add_primitive!("map");
-        add_primitive!("void");
+        add_primitive!("bool", Vec::new());
+        add_primitive!("string", Vec::new());
+        add_primitive!("byte", Vec::new());
+        add_primitive!("array", Vec::new());
+        add_primitive!("map", Vec::new());
+        add_primitive!("function", Vec::new());
+        add_primitive!("texture2d", Vec::new());
+        add_primitive!("texture3d", Vec::new());
+        add_primitive!("void", Vec::new());
     }
 
     pub fn update_file_first_pass(
@@ -193,7 +334,12 @@ impl SymbolGraph {
                                 file: file_name.to_owned(),
                                 root: ast::Root::Struct(struct_.clone()),
                                 definition: SymbolDefinition::Type(SymbolType {
-                                    fields: Vec::new(),
+                                    methods: Vec::new(),
+                                    fields: struct_
+                                        .fields
+                                        .iter()
+                                        .map(|field| (field.0.name.clone(), field.1.name.clone()))
+                                        .collect(),
                                 }),
                                 name: struct_.name.name.clone(),
                                 span: struct_.name.span.clone(),
@@ -365,6 +511,73 @@ impl SymbolGraph {
                                     hmap.insert(alias.clone(), symbol.clone());
                                 }
                             }
+                        }
+                    }
+                }
+                ast::Root::Impl(_impl) => {
+                    let mut this_file = self.files.get_mut(file_name).unwrap();
+                    let name = _impl.name.name.clone();
+                    if self.primitive.contains_key(name.as_str()) {
+                        add_alert(SpannedAlert::error(
+                            format!("You cannot extend primitives"),
+                            format!("Attempting to extend '{}'", name),
+                            Location::new(
+                                file_name.to_owned(),
+                                USizeTuple(_impl.name.span.start, _impl.name.span.end),
+                            ),
+                        ));
+                    } else if !this_file.contains_key(name.as_str()) {
+                        add_alert(SpannedAlert::error(
+                            format!("Implementation error"),
+                            format!("Type '{}' not found", name),
+                            Location::new(
+                                file_name.to_owned(),
+                                USizeTuple(_impl.name.span.start, _impl.name.span.end),
+                            ),
+                        ));
+                    } else {
+                        let symb = this_file.get_mut(name.as_str()).unwrap();
+                        if let SymbolDefinition::Type(symbol_type) = &mut symb.definition {
+                            symbol_type
+                                .methods
+                                .extend(_impl.body.clone().iter().map(|method| {
+                                    if let ast::Root::Function(ref function) = method {
+                                        (
+                                            function.name.name.clone(),
+                                            SymbolFunction {
+                                                parameters: function
+                                                    .parameters
+                                                    .clone()
+                                                    .iter()
+                                                    .map(|param| {
+                                                        (
+                                                            param.0.name.clone(),
+                                                            param.1.name.clone(),
+                                                            param.2.is_none(),
+                                                        )
+                                                    })
+                                                    .collect(),
+                                                return_type: match function.return_type {
+                                                    Some(ref return_type) => {
+                                                        Some(return_type.name.clone())
+                                                    }
+                                                    None => None,
+                                                },
+                                            },
+                                        )
+                                    } else {
+                                        unreachable!()
+                                    }
+                                }));
+                        } else {
+                            add_alert(SpannedAlert::error(
+                                format!("You cannot extend {}s", symb.definition.get_name()),
+                                format!("Attempting to extend '{}'", name,),
+                                Location::new(
+                                    file_name.to_owned(),
+                                    USizeTuple(_impl.name.span.start, _impl.name.span.end),
+                                ),
+                            ));
                         }
                     }
                 }

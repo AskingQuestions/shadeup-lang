@@ -184,16 +184,20 @@ impl Environment {
                             capture_ariadne_message(
                                 name,
                                 source,
-                                ariadne::Report::build(level_to_ariadne_level(err.level), name, 34)
-                                    .with_message(err.label.clone())
-                                    .with_label(
-                                        ariadne::Label::new((
-                                            name,
-                                            err.location.span.0..err.location.span.1,
-                                        ))
-                                        .with_message(err.message.clone()),
-                                    )
-                                    .finish(),
+                                ariadne::Report::build(
+                                    level_to_ariadne_level(err.level),
+                                    name,
+                                    err.location.span.0,
+                                )
+                                .with_message(err.label.clone())
+                                .with_label(
+                                    ariadne::Label::new((
+                                        name,
+                                        err.location.span.0..err.location.span.1,
+                                    ))
+                                    .with_message(err.message.clone()),
+                                )
+                                .finish(),
                             ),
                             format!("{}: {}", err.label.clone(), err.message.clone()),
                         )
