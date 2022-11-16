@@ -11,6 +11,7 @@ type SymbolRef = String;
 pub struct SymbolFunction {
     pub parameters: Vec<(String, SymbolRef, bool)>,
     pub return_type: Option<SymbolRef>,
+    pub javascript: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -50,6 +51,19 @@ pub struct SymbolNode {
     pub span: Span,
 }
 
+impl SymbolNode {
+    pub fn get_namespaced(&self) -> String {
+        format!(
+            "{}_{}",
+            self.file
+                .replace("/", "_")
+                .replace(".", "__")
+                .replace("-", "___"),
+            self.name
+        )
+    }
+}
+
 pub struct SymbolGraph {
     // file_name -> symbol_name -> symbol_node
     pub files: HashMap<String, HashMap<String, SymbolNode>>,
@@ -87,146 +101,283 @@ impl SymbolGraph {
         }
 
         macro_rules! add_scalar {
-            ($name:expr) => {
+            ($name:expr, $mask:expr) => {
                 let base_scalar_methods = |type_name: String| {
                     vec![
                         (
-                            "_operator_plus".to_string(),
+                            "__operator_plus".to_string(),
+                            SymbolFunction {
+                                parameters: vec![
+                                    ("__this".to_owned(), type_name.clone(), false),
+                                    ("other".to_owned(), type_name.clone(), false),
+                                ],
+                                return_type: Some(type_name.clone()),
+                                javascript: Some(format!("return (__this + other){};", $mask)),
+                            },
+                        ),
+                        (
+                            "__operator_minus".to_string(),
+                            SymbolFunction {
+                                parameters: vec![
+                                    ("__this".to_owned(), type_name.clone(), false),
+                                    ("other".to_owned(), type_name.clone(), false),
+                                ],
+                                return_type: Some(type_name.clone()),
+                                javascript: Some(format!("return (__this - other){};", $mask)),
+                            },
+                        ),
+                        (
+                            "__operator_divide".to_string(),
+                            SymbolFunction {
+                                parameters: vec![
+                                    ("__this".to_owned(), type_name.clone(), false),
+                                    ("other".to_owned(), type_name.clone(), false),
+                                ],
+                                return_type: Some(type_name.clone()),
+                                javascript: Some(format!("return (__this / other){};", $mask)),
+                            },
+                        ),
+                        (
+                            "__operator_multiply".to_string(),
+                            SymbolFunction {
+                                parameters: vec![
+                                    ("__this".to_owned(), type_name.clone(), false),
+                                    ("other".to_owned(), type_name.clone(), false),
+                                ],
+                                return_type: Some(type_name.clone()),
+                                javascript: Some(format!("return (__this * other){};", $mask)),
+                            },
+                        ),
+                        (
+                            "__operator_modulo".to_string(),
+                            SymbolFunction {
+                                parameters: vec![
+                                    ("__this".to_owned(), type_name.clone(), false),
+                                    ("other".to_owned(), type_name.clone(), false),
+                                ],
+                                return_type: Some(type_name.clone()),
+                                javascript: Some(format!("return (__this % other){};", $mask)),
+                            },
+                        ),
+                        (
+                            "__operator_equals".to_string(),
+                            SymbolFunction {
+                                parameters: vec![
+                                    ("__this".to_owned(), type_name.clone(), false),
+                                    ("other".to_owned(), type_name.clone(), false),
+                                ],
+                                return_type: Some("bool".to_string()),
+                                javascript: Some("return __this === other;".to_string()),
+                            },
+                        ),
+                        (
+                            "__operator_not_equals".to_string(),
+                            SymbolFunction {
+                                parameters: vec![
+                                    ("__this".to_owned(), type_name.clone(), false),
+                                    ("other".to_owned(), type_name.clone(), false),
+                                ],
+                                return_type: Some("bool".to_string()),
+                                javascript: Some("return __this !== other;".to_string()),
+                            },
+                        ),
+                        (
+                            "__operator_less_than".to_string(),
+                            SymbolFunction {
+                                parameters: vec![
+                                    ("__this".to_owned(), type_name.clone(), false),
+                                    ("other".to_owned(), type_name.clone(), false),
+                                ],
+                                return_type: Some("bool".to_string()),
+                                javascript: Some("return __this < other;".to_string()),
+                            },
+                        ),
+                        (
+                            "__operator_greater_than".to_string(),
+                            SymbolFunction {
+                                parameters: vec![
+                                    ("__this".to_owned(), type_name.clone(), false),
+                                    ("other".to_owned(), type_name.clone(), false),
+                                ],
+                                return_type: Some("bool".to_string()),
+                                javascript: Some("return __this > other;".to_string()),
+                            },
+                        ),
+                        (
+                            "__operator_less_than_or_equals".to_string(),
+                            SymbolFunction {
+                                parameters: vec![
+                                    ("__this".to_owned(), type_name.clone(), false),
+                                    ("other".to_owned(), type_name.clone(), false),
+                                ],
+                                return_type: Some("bool".to_string()),
+                                javascript: Some("return __this <= other;".to_string()),
+                            },
+                        ),
+                        (
+                            "__operator_greater_than_or_equals".to_string(),
+                            SymbolFunction {
+                                parameters: vec![
+                                    ("__this".to_owned(), type_name.clone(), false),
+                                    ("other".to_owned(), type_name.clone(), false),
+                                ],
+                                return_type: Some("bool".to_string()),
+                                javascript: Some("return __this >= other;".to_string()),
+                            },
+                        ),
+                        (
+                            "__is_scalar".to_string(),
+                            SymbolFunction {
+                                parameters: vec![
+                                    ("__this".to_owned(), type_name.clone(), false),
+                                    ("other".to_owned(), type_name.clone(), false),
+                                ],
+                                return_type: Some("bool".to_string()),
+                                javascript: None,
+                            },
+                        ),
+                        (
+                            "__cast_from_scalar".to_string(),
                             SymbolFunction {
                                 parameters: vec![("other".to_owned(), type_name.clone(), false)],
                                 return_type: Some(type_name.clone()),
-                            },
-                        ),
-                        (
-                            "_operator_minus".to_string(),
-                            SymbolFunction {
-                                parameters: vec![("other".to_owned(), type_name.clone(), false)],
-                                return_type: Some(type_name.clone()),
-                            },
-                        ),
-                        (
-                            "_operator_divide".to_string(),
-                            SymbolFunction {
-                                parameters: vec![("other".to_owned(), type_name.clone(), false)],
-                                return_type: Some(type_name.clone()),
-                            },
-                        ),
-                        (
-                            "_operator_multiply".to_string(),
-                            SymbolFunction {
-                                parameters: vec![("other".to_owned(), type_name.clone(), false)],
-                                return_type: Some(type_name.clone()),
-                            },
-                        ),
-                        (
-                            "_operator_modulo".to_string(),
-                            SymbolFunction {
-                                parameters: vec![("other".to_owned(), type_name.clone(), false)],
-                                return_type: Some(type_name.clone()),
-                            },
-                        ),
-                        (
-                            "_operator_equals".to_string(),
-                            SymbolFunction {
-                                parameters: vec![("other".to_owned(), type_name.clone(), false)],
-                                return_type: Some("bool".to_string()),
-                            },
-                        ),
-                        (
-                            "_operator_not_equals".to_string(),
-                            SymbolFunction {
-                                parameters: vec![("other".to_owned(), type_name.clone(), false)],
-                                return_type: Some("bool".to_string()),
-                            },
-                        ),
-                        (
-                            "_operator_less_than".to_string(),
-                            SymbolFunction {
-                                parameters: vec![("other".to_owned(), type_name.clone(), false)],
-                                return_type: Some("bool".to_string()),
-                            },
-                        ),
-                        (
-                            "_operator_greater_than".to_string(),
-                            SymbolFunction {
-                                parameters: vec![("other".to_owned(), type_name.clone(), false)],
-                                return_type: Some("bool".to_string()),
-                            },
-                        ),
-                        (
-                            "_operator_less_than_or_equals".to_string(),
-                            SymbolFunction {
-                                parameters: vec![("other".to_owned(), type_name.clone(), false)],
-                                return_type: Some("bool".to_string()),
-                            },
-                        ),
-                        (
-                            "_operator_greater_than_or_equals".to_string(),
-                            SymbolFunction {
-                                parameters: vec![("other".to_owned(), type_name.clone(), false)],
-                                return_type: Some("bool".to_string()),
+                                javascript: Some(format!("return other{};", $mask)),
                             },
                         ),
                     ]
                 };
-                let mutli_scalar_methods = |type_name: String, single_name: String| {
-                    vec![(
-                        "_operator_cross".to_string(),
-                        SymbolFunction {
-                            parameters: vec![("other".to_owned(), type_name.clone(), false)],
-                            return_type: Some(single_name.clone()),
-                        },
-                    )]
-                };
-                add_primitive!(
-                    $name,
-                    [
-                        vec![(
-                            "_operator_multiply".to_string(),
+                let mutlti_scalar_methods = |type_name: String,
+                                             single_name: String,
+                                             num_fields: i32,
+                                             mask: &str| {
+                    let gen_op_on_fields = |op: &str| {
+                        format!(
+                            "return [{}]",
+                            (0..num_fields)
+                                .map(|i| format!("(__this[{}] {} other[{}]){}", i, op, i, mask))
+                                .collect::<Vec<String>>()
+                                .join(", ")
+                        )
+                    };
+                    vec![
+                        (
+                            "__operator_cross".to_string(),
                             SymbolFunction {
-                                parameters: vec![("other".to_owned(), $name.to_string(), false)],
-                                return_type: Some($name.to_string()),
+                                parameters: vec![
+                                    ("__this".to_owned(), type_name.clone(), false),
+                                    ("other".to_owned(), type_name.clone(), false),
+                                ],
+                                return_type: Some(single_name.clone()),
+                                javascript: Some(gen_op_on_fields("*")),
                             },
-                        )],
-                        base_scalar_methods($name.to_string())
+                        ),
+                        (
+                            "__operator_plus".to_string(),
+                            SymbolFunction {
+                                parameters: vec![
+                                    ("__this".to_owned(), type_name.clone(), false),
+                                    ("other".to_owned(), type_name.clone(), false),
+                                ],
+                                return_type: Some(type_name.clone()),
+                                javascript: Some(gen_op_on_fields("+")),
+                            },
+                        ),
+                        (
+                            "__operator_minus".to_string(),
+                            SymbolFunction {
+                                parameters: vec![
+                                    ("__this".to_owned(), type_name.clone(), false),
+                                    ("other".to_owned(), type_name.clone(), false),
+                                ],
+                                return_type: Some(type_name.clone()),
+                                javascript: Some(gen_op_on_fields("-")),
+                            },
+                        ),
+                        (
+                            "__operator_divide".to_string(),
+                            SymbolFunction {
+                                parameters: vec![
+                                    ("__this".to_owned(), type_name.clone(), false),
+                                    ("other".to_owned(), type_name.clone(), false),
+                                ],
+                                return_type: Some(type_name.clone()),
+                                javascript: Some(gen_op_on_fields("/")),
+                            },
+                        ),
+                        (
+                            "__operator_multiply".to_string(),
+                            SymbolFunction {
+                                parameters: vec![
+                                    ("__this".to_owned(), type_name.clone(), false),
+                                    ("other".to_owned(), type_name.clone(), false),
+                                ],
+                                return_type: Some(type_name.clone()),
+                                javascript: Some(gen_op_on_fields("*")),
+                            },
+                        ),
+                        (
+                            "__operator_modulo".to_string(),
+                            SymbolFunction {
+                                parameters: vec![
+                                    ("__this".to_owned(), type_name.clone(), false),
+                                    ("other".to_owned(), type_name.clone(), false),
+                                ],
+                                return_type: Some(type_name.clone()),
+                                javascript: Some(gen_op_on_fields("%")),
+                            },
+                        ),
+                        (
+                            format!("__is_vec_{}", num_fields),
+                            SymbolFunction {
+                                parameters: vec![
+                                    ("__this".to_owned(), type_name.clone(), false),
+                                    ("other".to_owned(), type_name.clone(), false),
+                                ],
+                                return_type: Some("bool".to_string()),
+                                javascript: None,
+                            },
+                        ),
+                        (
+                            "__cast_from_vec".to_string(),
+                            SymbolFunction {
+                                parameters: vec![("other".to_owned(), type_name.clone(), false)],
+                                return_type: Some(type_name.clone()),
+                                javascript: Some(format!(
+                                    "return [{}];",
+                                    (0..num_fields)
+                                        .map(|i| format!("(other[{}]{})", i, $mask))
+                                        .collect::<Vec<String>>()
+                                        .join(", ")
+                                )),
+                            },
+                        ),
                     ]
-                    .concat()
-                );
+                };
+                add_primitive!($name, base_scalar_methods($name.to_string()));
                 add_primitive!(
                     format!("{}{}", $name, "2"),
-                    [
-                        mutli_scalar_methods(format!("{}{}", $name, "2"), $name.to_string()),
-                        base_scalar_methods(format!("{}{}", $name, "2"))
-                    ]
-                    .concat()
+                    mutlti_scalar_methods(format!("{}{}", $name, "2"), $name.to_string(), 2, $mask)
                 );
                 add_primitive!(
                     format!("{}{}", $name, "3"),
-                    [
-                        mutli_scalar_methods(format!("{}{}", $name, "3"), $name.to_string()),
-                        base_scalar_methods(format!("{}{}", $name, "3"))
-                    ]
-                    .concat()
+                    mutlti_scalar_methods(format!("{}{}", $name, "3"), $name.to_string(), 3, $mask)
                 );
                 add_primitive!(
                     format!("{}{}", $name, "4"),
-                    [
-                        mutli_scalar_methods(format!("{}{}", $name, "4"), $name.to_string()),
-                        base_scalar_methods(format!("{}{}", $name, "4"))
-                    ]
-                    .concat()
+                    mutlti_scalar_methods(format!("{}{}", $name, "4"), $name.to_string(), 4, $mask)
                 );
                 add_primitive!(format!("{}{}", $name, "3x3"), vec![]);
                 add_primitive!(format!("{}{}", $name, "4x4"), vec![]);
             };
         }
 
-        add_scalar!("int");
-        add_scalar!("half");
-        add_scalar!("uint");
-        add_scalar!("short");
-        add_scalar!("float");
-        add_scalar!("double");
+        add_scalar!("int", " & 0xffffffff");
+        add_scalar!("uint", ">>>0 & 0xffffffff");
+        add_scalar!("short", " & 0xffff");
+
+        add_scalar!("half", "");
+        add_scalar!("float", "");
+        add_scalar!("double", "");
 
         add_primitive!("bool", Vec::new());
         add_primitive!("string", Vec::new());
@@ -236,6 +387,7 @@ impl SymbolGraph {
         add_primitive!("function", Vec::new());
         add_primitive!("texture2d", Vec::new());
         add_primitive!("texture3d", Vec::new());
+        add_primitive!("shader", Vec::new());
         add_primitive!("void", Vec::new());
     }
 
@@ -296,26 +448,7 @@ impl SymbolGraph {
         for root in roots {
             match root {
                 ast::Root::Import(import) => {
-                    let names = &import.name;
-                    let path = import.path.value.clone();
-
-                    if !self.files.contains_key(&path) {
-                        let alert = SpannedAlert::error(
-                            format!("Import error"),
-                            format!(
-                                "Attempting to import from an unknown file, module, or package: '{}'",
-                                path
-                            ),
-                            Location::new(
-                                file_name.to_owned(),
-                                USizeTuple(import.path.span.start, import.path.span.end),
-                            ),
-                        );
-
-                        add_alert(alert);
-                    } else {
-                        // Pass, this is handled in the second pass
-                    }
+                    // Handled in second pass
                 }
                 ast::Root::Struct(struct_) => {
                     let name = struct_.name.name.clone();
@@ -364,6 +497,7 @@ impl SymbolGraph {
                                 file: file_name.to_owned(),
                                 root: ast::Root::Function(function.clone()),
                                 definition: SymbolDefinition::Function(SymbolFunction {
+                                    javascript: None,
                                     parameters: function
                                         .parameters
                                         .iter()
@@ -442,7 +576,19 @@ impl SymbolGraph {
                     let path = import.path.value.clone();
 
                     if !self.files.contains_key(&path) {
-                        // Pass, we already reported this in the first pass
+                        let alert = SpannedAlert::error(
+                            format!("Import error"),
+                            format!(
+                                "Attempting to import from an unknown file, module, or package: '{}'",
+                                path
+                            ),
+                            Location::new(
+                                file_name.to_owned(),
+                                USizeTuple(import.path.span.start, import.path.span.end),
+                            ),
+                        );
+
+                        add_alert(alert);
                     } else {
                         let file = self.files.get(path.as_str()).unwrap();
 
@@ -545,6 +691,7 @@ impl SymbolGraph {
                                         (
                                             function.name.name.clone(),
                                             SymbolFunction {
+                                                javascript: None,
                                                 parameters: function
                                                     .parameters
                                                     .clone()

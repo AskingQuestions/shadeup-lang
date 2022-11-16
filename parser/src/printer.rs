@@ -76,6 +76,7 @@ pub fn print_pretty_alert(source: &str, location: Location, level: AlertLevel, m
     );
 }
 
+#[derive(Debug, Clone)]
 pub struct SpannedAlert {
     pub label: String,
 

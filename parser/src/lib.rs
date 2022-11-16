@@ -1,6 +1,8 @@
+use crate::validator::TypedIntermediate;
 use std::collections::HashMap;
 
 pub mod ast;
+pub mod generator;
 pub mod graph;
 pub mod parser2;
 pub mod printer;
@@ -12,6 +14,7 @@ use crate::printer::AlertLevel;
 use std::io::{BufWriter, Write};
 
 use ast::{Span, USizeTuple};
+use printer::SpannedAlert;
 #[cfg(feature = "wasm")]
 use wasm_bindgen::prelude::*;
 
@@ -57,7 +60,10 @@ impl Alert {
 pub struct File {
     pub name: String,
     pub source: String,
+    pub ast: Option<Vec<ast::Root>>,
+    pub validation: Vec<SpannedAlert>,
     pub alerts: Vec<Alert>,
+    pub generated: String,
 }
 
 #[cfg_attr(feature = "wasm", wasm_bindgen)]
@@ -101,7 +107,10 @@ impl Environment {
             File {
                 name,
                 source,
+                ast: None,
+                validation: Vec::new(),
                 alerts: Vec::new(),
+                generated: String::new(),
             },
         );
     }
@@ -111,7 +120,7 @@ impl Environment {
     }
 
     pub fn parse_file(&mut self, name: &str) -> Result<(), ()> {
-        let file = self.files.get(name).unwrap();
+        let file = self.files.get_mut(name).unwrap();
 
         let source = file.source.as_str();
 
@@ -138,93 +147,110 @@ impl Environment {
         if ast.is_some() {
             let ast_ref = ast.as_ref().unwrap();
             let mut validation_errors = self.graph.update_file_first_pass(name, ast_ref);
-            validation_errors.extend(self.graph.update_file_second_pass(name, ast_ref));
+            file.ast = ast;
+            file.validation.extend(validation_errors);
+        } else {
+            self.graph
+                .update_file_first_pass(name, ast.as_ref().unwrap());
+        }
 
-            validation_errors.extend(validator::validate(&self.graph, name));
+        file.alerts.extend(alerts);
 
-            for err in validation_errors {
-                let (pretty_msg, simple_msg) =
-                    if err.other_message.is_some() && err.other_location.is_some() {
-                        (
-                            capture_ariadne_message(
-                                name,
-                                source,
-                                ariadne::Report::build(
-                                    level_to_ariadne_level(err.level),
-                                    name,
-                                    err.location.span.0,
-                                )
-                                .with_message(err.label.clone())
-                                .with_label(
-                                    ariadne::Label::new((
-                                        name,
-                                        err.location.span.0..err.location.span.1,
-                                    ))
-                                    .with_message(err.message.clone()),
-                                )
-                                .with_label(
-                                    ariadne::Label::new((
-                                        name,
-                                        err.other_location.clone().unwrap().span.0
-                                            ..err.other_location.clone().unwrap().span.1,
-                                    ))
-                                    .with_message(err.other_message.clone().unwrap()),
-                                )
-                                .finish(),
-                            ),
-                            format!(
-                                "{}: {}, {}",
-                                err.label.clone(),
-                                err.message.clone(),
-                                err.other_message.clone().unwrap()
-                            ),
-                        )
-                    } else {
-                        (
-                            capture_ariadne_message(
-                                name,
-                                source,
-                                ariadne::Report::build(
-                                    level_to_ariadne_level(err.level),
-                                    name,
-                                    err.location.span.0,
-                                )
-                                .with_message(err.label.clone())
-                                .with_label(
-                                    ariadne::Label::new((
-                                        name,
-                                        err.location.span.0..err.location.span.1,
-                                    ))
-                                    .with_message(err.message.clone()),
-                                )
-                                .finish(),
-                            ),
-                            format!("{}: {}", err.label.clone(), err.message.clone()),
-                        )
-                    };
+        Ok(())
+    }
 
-                alerts.push(Alert {
-                    message: pretty_msg,
-                    simple_message: simple_msg,
-                    level: err.level,
-                    location: SourceLocation {
-                        start_line_and_column: err
-                            .location
-                            .get_start_line_and_column(file.source.as_str()),
-                        end_line_and_column: err
-                            .location
-                            .get_end_line_and_column(file.source.as_str()),
-                    },
-                    span: USizeTuple(err.location.span.0, err.location.span.1),
-                });
-            }
+    pub fn process_file(&mut self, name: &str) -> Result<(), ()> {
+        let mut alerts = vec![];
+
+        let mut generated = String::new();
+        let file = self.files.get_mut(name).unwrap();
+        if let Some(ref ast_ref) = file.ast {
+            file.validation
+                .extend(self.graph.update_file_second_pass(name, ast_ref));
+
+            let (_alerts, typed) = validator::validate(&self.graph, name);
+            file.validation.extend(_alerts);
+
+            generated = generator::generate(&self.graph, name, &typed).javascript;
         } else {
             let ast = vec![];
-            self.graph.update_file_first_pass(name, &ast);
             self.graph.update_file_second_pass(name, &ast);
         }
 
-        self.get_file(name).unwrap().alerts = alerts;
+        let file = self.files.get(name).unwrap();
+        for err in &file.validation {
+            let source = file.source.as_str();
+            let (pretty_msg, simple_msg) = if err.other_message.is_some()
+                && err.other_location.is_some()
+            {
+                (
+                    capture_ariadne_message(
+                        name,
+                        source,
+                        ariadne::Report::build(
+                            level_to_ariadne_level(err.level),
+                            name,
+                            err.location.span.0,
+                        )
+                        .with_message(err.label.clone())
+                        .with_label(
+                            ariadne::Label::new((name, err.location.span.0..err.location.span.1))
+                                .with_message(err.message.clone()),
+                        )
+                        .with_label(
+                            ariadne::Label::new((
+                                name,
+                                err.other_location.clone().unwrap().span.0
+                                    ..err.other_location.clone().unwrap().span.1,
+                            ))
+                            .with_message(err.other_message.clone().unwrap()),
+                        )
+                        .finish(),
+                    ),
+                    format!(
+                        "{}: {}, {}",
+                        err.label.clone(),
+                        err.message.clone(),
+                        err.other_message.clone().unwrap()
+                    ),
+                )
+            } else {
+                (
+                    capture_ariadne_message(
+                        name,
+                        source,
+                        ariadne::Report::build(
+                            level_to_ariadne_level(err.level),
+                            name,
+                            err.location.span.0,
+                        )
+                        .with_message(err.label.clone())
+                        .with_label(
+                            ariadne::Label::new((name, err.location.span.0..err.location.span.1))
+                                .with_message(err.message.clone()),
+                        )
+                        .finish(),
+                    ),
+                    format!("{}: {}", err.label.clone(), err.message.clone()),
+                )
+            };
+
+            alerts.push(Alert {
+                message: pretty_msg,
+                simple_message: simple_msg,
+                level: err.level,
+                location: SourceLocation {
+                    start_line_and_column: err
+                        .location
+                        .get_start_line_and_column(file.source.as_str()),
+                    end_line_and_column: err.location.get_end_line_and_column(file.source.as_str()),
+                },
+                span: USizeTuple(err.location.span.0, err.location.span.1),
+            });
+        }
+
+        self.get_file(name).unwrap().alerts.extend(alerts);
+        self.get_file(name).unwrap().generated = generated;
 
         return Ok(());
     }
