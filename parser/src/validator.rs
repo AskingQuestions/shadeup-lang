@@ -1,7 +1,5 @@
 use std::collections::HashMap;
 
-
-
 use crate::ast::{self, Expression, Location, Op, Span, USizeTuple};
 use crate::graph::{SymbolDefinition, SymbolGraph, SymbolType};
 use crate::printer::SpannedAlert;
@@ -12,7 +10,8 @@ pub struct Scope<'a> {
     parent: Option<Box<&'a Scope<'a>>>,
 }
 
-#[derive(Debug, Clone)]
+#[allow(dead_code)]
+#[derive(Clone)]
 pub enum TypedValue {
     Int(i64),
     Float(f64),
@@ -22,13 +21,13 @@ pub enum TypedValue {
     Error,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct TypedShaderInstance {
     pub closure: HashMap<String, String>,
     pub functions: HashMap<String, bool>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum TypedExpression {
     Call(String, Vec<TypedExpression>, Span),
     Value(TypedValue, Span),
@@ -51,14 +50,14 @@ impl TypedExpression {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct TypedFunctionParameter {
     pub name: String,
     pub type_name: ExpandedType,
     pub default_value: Option<TypedExpression>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum TypedStatement {
     Return(TypedExpression, Span),
     If {
@@ -77,6 +76,7 @@ pub enum TypedStatement {
 }
 
 impl TypedStatement {
+    #[allow(dead_code)]
     pub fn get_span(&self) -> Span {
         match self {
             TypedStatement::Return(_, span) => span.clone(),
@@ -87,7 +87,8 @@ impl TypedStatement {
     }
 }
 
-#[derive(Debug, Clone)]
+#[allow(dead_code)]
+#[derive(Clone)]
 pub enum TypedTagType {
     Async,
     DynamicAlloc,
@@ -96,7 +97,7 @@ pub enum TypedTagType {
     Recursive,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct TypedTag {
     pub tag: TypedTagType,
     pub span: Span,
@@ -104,13 +105,13 @@ pub struct TypedTag {
     pub introduced_by: Option<Box<TypedTag>>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct TypedBody {
     pub statements: Vec<TypedStatement>,
     pub tags: Vec<TypedTag>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct TypedFunction {
     pub name: String,
     pub parameters: Vec<TypedFunctionParameter>,
@@ -122,7 +123,7 @@ pub struct TypedFunction {
     pub tagging: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct TypedIntermediate {
     pub functions: HashMap<String, TypedFunction>,
     pub structs: Vec<(String, Vec<String>)>,
@@ -237,7 +238,11 @@ fn shake_body(
                     );
                 }
             }
-            TypedStatement::Let { name: _, value, span: _ } => {
+            TypedStatement::Let {
+                name: _,
+                value,
+                span: _,
+            } => {
                 shake_expression(
                     graph,
                     new_scope,
@@ -1042,7 +1047,11 @@ fn build_shader_instance(
                     );
                 }
             }
-            TypedStatement::Let { name: _, value, span: _ } => {
+            TypedStatement::Let {
+                name: _,
+                value,
+                span: _,
+            } => {
                 build_shader_expression(
                     _alerts,
                     graph,
@@ -1068,7 +1077,7 @@ fn build_shader_instance(
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ExpandedType {
     name: String,
     generics: Vec<ExpandedType>,
@@ -1526,10 +1535,10 @@ pub fn validate<'a>(
     // };
 
     let _check_body = |_alerts: &mut Vec<SpannedAlert>,
-                      scope: &mut Scope,
-                      body: &Vec<ast::Root>,
-                      intermediate: &mut TypedIntermediate,
-                      output: &ExpandedType|
+                       scope: &mut Scope,
+                       body: &Vec<ast::Root>,
+                       intermediate: &mut TypedIntermediate,
+                       output: &ExpandedType|
      -> TypedBody {
         check_body_local(_alerts, scope, graph, file_name, intermediate, body, output)
     };
@@ -1830,7 +1839,11 @@ pub fn propagate_tags(intermediate: &mut TypedIntermediate, body: &TypedBody) ->
                     tags.append(&mut propagate_tags(intermediate, else_body));
                 }
             }
-            TypedStatement::Let { name: _, value, span: _ } => {
+            TypedStatement::Let {
+                name: _,
+                value,
+                span: _,
+            } => {
                 tags.append(&mut propagate_tags_from_expression(intermediate, value));
             }
             TypedStatement::Expression(expr, _) => {

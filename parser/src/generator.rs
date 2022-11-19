@@ -1,9 +1,6 @@
+use crate::graph::SymbolGraph;
 
-use crate::graph::{SymbolGraph};
-
-use crate::validator::{
-    TypedBody, TypedExpression, TypedIntermediate, TypedStatement, TypedValue,
-};
+use crate::validator::{TypedBody, TypedExpression, TypedIntermediate, TypedStatement, TypedValue};
 
 pub struct ProgramOutput {
     pub javascript: String,
@@ -65,7 +62,11 @@ fn gen_body_local(graph: &SymbolGraph, file_name: &str, body: &TypedBody) -> Str
 
     for root in &body.statements {
         let line: String = match root {
-            TypedStatement::Let { name, value, span: _ } => {
+            TypedStatement::Let {
+                name,
+                value,
+                span: _,
+            } => {
                 format!(
                     "let {} = {};",
                     name,
@@ -120,7 +121,6 @@ fn gen_body_local(graph: &SymbolGraph, file_name: &str, body: &TypedBody) -> Str
                     gen_expression_local(graph, file_name, &_return)
                 )
             }
-            _ => "".to_owned(),
         };
 
         out.push_str(&line);

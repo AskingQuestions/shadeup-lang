@@ -1,6 +1,7 @@
-use parser::Environment;
+use crate::environment::Environment;
 
 mod ast;
+mod environment;
 mod generator;
 mod graph;
 mod parser2;

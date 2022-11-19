@@ -2,17 +2,16 @@
 use wasm_bindgen::prelude::*;
 
 use std::fmt;
-use std::fmt::{Debug};
 
 use std::vec::Vec;
 
 pub type Span = std::ops::Range<usize>;
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Copy, Clone)]
 #[cfg_attr(feature = "wasm", wasm_bindgen)]
 pub struct USizeTuple(pub usize, pub usize);
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 #[cfg_attr(feature = "wasm", wasm_bindgen)]
 pub struct Location {
     file: String,
@@ -48,33 +47,34 @@ impl Location {
         self.get_line_and_column(source, self.span.1)
     }
 
+    #[allow(dead_code)]
     #[cfg_attr(feature = "wasm", wasm_bindgen(getter))]
     pub fn file(&self) -> String {
         self.file.clone()
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Identifier {
     pub name: String,
     pub span: Span,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct SymbolName {
     pub value: Identifier,
 
     pub alias: Option<Box<SymbolName>>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct StringLiteral {
     pub value: String,
     pub span: Span,
     // pub location: Location,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Function {
     pub name: Identifier,
     pub body: Block,
@@ -83,14 +83,14 @@ pub struct Function {
     pub span: Span,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Impl {
     pub name: Identifier,
     pub body: Vec<Root>,
     pub span: Span,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum Root {
     Import(Import),
     Function(Function),
@@ -106,22 +106,6 @@ pub enum Root {
 }
 
 impl Root {
-    pub fn get_name(&self) -> Option<String> {
-        match self {
-            Root::Import(_) => None,
-            Root::Function(f) => Some(f.name.name.clone()),
-            Root::Main(_) => Some("main".to_string()),
-            Root::Shader(_) => Some("shader".to_string()),
-            Root::Expression(_) => None,
-            Root::Struct(s) => Some(s.name.name.clone()),
-            Root::Impl(i) => Some(i.name.name.clone()),
-            Root::If(_) => None,
-            Root::Let(l) => Some(l.name.name.clone()),
-            Root::Return(_) => None,
-            Root::Error => None,
-        }
-    }
-
     pub fn get_kind(&self) -> &str {
         match self {
             Root::Import(_) => "import",
@@ -155,7 +139,7 @@ impl Root {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub enum Value {
     Null,
     Bool(bool),
@@ -166,7 +150,8 @@ pub enum Value {
     // Func(String),
 }
 
-#[derive(Debug, Clone)]
+#[allow(dead_code)]
+#[derive(Clone)]
 pub enum Expression {
     Identifier((Identifier, Span)),
     List((Vec<Expression>, Span)),
@@ -197,14 +182,14 @@ impl Expression {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Call {
     pub expression: Box<Expression>,
     pub args: Vec<Expression>,
     pub span: Span,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub enum Op {
     RFlow,
     EqEq,
@@ -294,7 +279,7 @@ impl Op {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct If {
     pub condition: Expression,
     pub body: Block,
@@ -303,7 +288,7 @@ pub struct If {
     pub span: Span,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Let {
     pub name: Identifier,
     pub value_type: Option<Identifier>,
@@ -312,110 +297,35 @@ pub struct Let {
     pub span: Span,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Return {
     pub value: Option<Expression>,
 
     pub span: Span,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Struct {
     pub name: Identifier,
     pub fields: Vec<(Identifier, Identifier)>,
     pub span: Span,
 }
 
-pub struct Program {
-    pub imports: Vec<Import>,
-    pub blocks: Vec<Block>,
-}
-
-impl Program {
-    pub fn new() -> Program {
-        Program {
-            imports: vec![],
-            blocks: vec![],
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ImportName {
     pub name: Identifier,
     pub alias: Option<Identifier>,
     pub span: Span,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Import {
     pub path: StringLiteral,
     pub name: Vec<ImportName>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Block {
     pub span: Span,
     pub roots: Vec<Root>,
 }
-
-// #[derive(Debug, Clone)]
-// pub enum Block {
-//     StructBlock(StructBlock),
-//     VariableBlock(VariableBlock),
-//     CodeBlock(CodeBlock),
-// }
-
-// pub enum Expr {
-//     Number(i32),
-//     Op(Box<Expr>, Opcode, Box<Expr>),
-//     Error,
-// }
-
-// pub enum ExprSymbol<'input> {
-//     NumSymbol(&'input str),
-//     Op(Box<ExprSymbol<'input>>, Opcode, Box<ExprSymbol<'input>>),
-//     Error,
-// }
-
-// #[derive(Copy, Clone)]
-// pub enum Opcode {
-//     Mul,
-//     Div,
-//     Add,
-//     Sub,
-// }
-
-// impl Debug for Expr {
-//     fn fmt(&self, fmt: &mut Formatter) -> Result<(), Error> {
-//         use self::Expr::*;
-//         match *self {
-//             Number(n) => write!(fmt, "{:?}", n),
-//             Op(ref l, op, ref r) => write!(fmt, "({:?} {:?} {:?})", l, op, r),
-//             Error => write!(fmt, "error"),
-//         }
-//     }
-// }
-
-// impl<'input> Debug for ExprSymbol<'input> {
-//     fn fmt(&self, fmt: &mut Formatter) -> Result<(), Error> {
-//         use self::ExprSymbol::*;
-//         match *self {
-//             NumSymbol(n) => write!(fmt, "{:?}", n),
-//             Op(ref l, op, ref r) => write!(fmt, "({:?} {:?} {:?})", l, op, r),
-//             Error => write!(fmt, "error"),
-//         }
-//     }
-// }
-
-// impl Debug for Opcode {
-//     fn fmt(&self, fmt: &mut Formatter) -> Result<(), Error> {
-//         use self::Opcode::*;
-//         match *self {
-//             Mul => write!(fmt, "*"),
-//             Div => write!(fmt, "/"),
-//             Add => write!(fmt, "+"),
-//             Sub => write!(fmt, "-"),
-//         }
-//     }
-// }

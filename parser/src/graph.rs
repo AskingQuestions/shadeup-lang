@@ -1,3 +1,4 @@
+#[allow(unused_imports)]
 #[cfg(feature = "wasm")]
 use wasm_bindgen::prelude::*;
 
@@ -8,7 +9,7 @@ use std::collections::HashMap;
 
 type SymbolRef = String;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct SymbolFunction {
     pub parameters: Vec<(String, SymbolRef, bool)>,
     pub return_type: Option<SymbolRef>,
@@ -16,18 +17,19 @@ pub struct SymbolFunction {
     pub tags: Vec<TypedTag>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct SymbolType {
     pub fields: Vec<(String, SymbolRef)>,
     pub methods: Vec<(String, SymbolFunction)>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct SymbolConstant {
     pub value_type: SymbolRef,
 }
 
-#[derive(Debug, Clone)]
+#[allow(dead_code)]
+#[derive(Clone)]
 pub enum SymbolDefinition {
     Constant(SymbolConstant),
     Function(SymbolFunction),
@@ -44,7 +46,7 @@ impl SymbolDefinition {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct SymbolNode {
     pub imported: bool,
     pub name: String,
@@ -601,28 +603,6 @@ impl SymbolGraph {
         let mut add_alert = |alert: SpannedAlert| {
             alerts.push(alert);
         };
-
-        macro_rules! alert_already_defined {
-            ($location_:expr, $name_:expr, $other_:expr) => {
-                let location: Span = $location_;
-                let name: &str = $name_;
-                let other: Span = $other_;
-                let loc = Location::new(
-                    file_name.to_owned(),
-                    USizeTuple(location.start, location.end),
-                );
-
-                let alert = SpannedAlert::error_2(
-                    format!("Redefinition of symbol"),
-                    format!("Symbol '{}' is already defined", name),
-                    loc,
-                    format!("here"),
-                    Location::new(file_name.to_owned(), USizeTuple(other.start, other.end)),
-                );
-
-                add_alert(alert);
-            };
-        }
 
         for root in roots {
             match root {

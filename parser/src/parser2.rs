@@ -1,15 +1,15 @@
 use ariadne::{Color, Fmt, Label, Report, ReportKind, Source};
 
 use chumsky::{prelude::*, stream::Stream};
+use std::fmt;
 use std::io::{BufWriter, Write};
 use std::str;
-use std::{fmt};
 
 use crate::ast::{self, Op, Value};
 
 pub type Span = std::ops::Range<usize>;
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 enum Token {
     Null,
     Bool(bool),
@@ -196,253 +196,6 @@ impl std::fmt::Display for Value {
             //         .join(", ")
             // ),
             // Self::Func(name) => write!(f, "<function: {}>", name),
-        }
-    }
-}
-
-struct Error {
-    span: Span,
-    msg: String,
-}
-
-#[derive(Clone, Debug)]
-enum BinaryOp {
-    Add,
-    Sub,
-    Mul,
-    Div,
-    Eq,
-    NotEq,
-}
-
-pub type Spanned<T> = (T, Span);
-
-// An expression node in the AST. Children are spanned so we can generate useful runtime errors.
-#[derive(Debug)]
-enum Expr {
-    Error,
-    Value(Value),
-    List(Vec<Spanned<Self>>),
-    Local(String),
-    Let(String, Box<Spanned<Self>>, Box<Spanned<Self>>),
-    Then(Box<Spanned<Self>>, Box<Spanned<Self>>),
-    Binary(Box<Spanned<Self>>, BinaryOp, Box<Spanned<Self>>),
-    Call(Box<Spanned<Self>>, Vec<Spanned<Self>>),
-    If(Box<Spanned<Self>>, Box<Spanned<Self>>, Box<Spanned<Self>>),
-    Print(Box<Spanned<Self>>),
-}
-
-// A function node in the AST.
-#[derive(Debug)]
-struct Func {
-    args: Vec<String>,
-    body: Spanned<Expr>,
-}
-
-fn expr_parser() -> impl Parser<Token, Spanned<Expr>, Error = Simple<Token>> + Clone {
-    recursive(|expr| {
-        let raw_expr = recursive(|raw_expr| {
-            let val = select! {
-                Token::Null => Expr::Value(Value::Null),
-                Token::Bool(x) => Expr::Value(Value::Bool(x)),
-                Token::Int(x) => Expr::Value(Value::Int(x)),
-                Token::Real(n) => Expr::Value(Value::Real(n.parse().unwrap())),
-                Token::Str(s) => Expr::Value(Value::Str(s)),
-            }
-            .labelled("value");
-
-            let ident = select! { Token::Ident(ident) => ident.clone() }.labelled("identifier");
-
-            // A list of expressions
-            let items = expr
-                .clone()
-                .separated_by(just(Token::Ctrl(',')))
-                .allow_trailing();
-
-            // A let expression
-            let let_ = just(Token::Let)
-                .ignore_then(ident)
-                .then_ignore(just(Token::Op(Op::Eq)))
-                .then(raw_expr)
-                .then_ignore(just(Token::Ctrl(';')))
-                .then(expr.clone())
-                .map(|((name, val), body)| Expr::Let(name, Box::new(val), Box::new(body)));
-
-            let list = items
-                .clone()
-                .delimited_by(just(Token::Ctrl('[')), just(Token::Ctrl(']')))
-                .map(Expr::List);
-
-            // 'Atoms' are expressions that contain no ambiguity
-            let atom = val
-                .or(ident.map(Expr::Local))
-                .or(let_)
-                .or(list)
-                // // In Nano Rust, `print` is just a keyword, just like Python 2, for simplicity
-                // .or(just(Token::Print)
-                //     .ignore_then(
-                //         expr.clone()
-                //             .delimited_by(just(Token::Ctrl('(')), just(Token::Ctrl(')'))),
-                //     )
-                //     .map(|expr| Expr::Print(Box::new(expr))))
-                .map_with_span(|expr, span| (expr, span))
-                // Atoms can also just be normal expressions, but surrounded with parentheses
-                .or(expr
-                    .clone()
-                    .delimited_by(just(Token::Ctrl('(')), just(Token::Ctrl(')'))))
-                // Attempt to recover anything that looks like a parenthesised expression but contains errors
-                .recover_with(nested_delimiters(
-                    Token::Ctrl('('),
-                    Token::Ctrl(')'),
-                    [
-                        (Token::Ctrl('['), Token::Ctrl(']')),
-                        (Token::Ctrl('{'), Token::Ctrl('}')),
-                    ],
-                    |span| (Expr::Error, span),
-                ))
-                // Attempt to recover anything that looks like a list but contains errors
-                .recover_with(nested_delimiters(
-                    Token::Ctrl('['),
-                    Token::Ctrl(']'),
-                    [
-                        (Token::Ctrl('('), Token::Ctrl(')')),
-                        (Token::Ctrl('{'), Token::Ctrl('}')),
-                    ],
-                    |span| (Expr::Error, span),
-                ));
-
-            // Function calls have very high precedence so we prioritise them
-            let call = atom
-                .then(
-                    items
-                        .delimited_by(just(Token::Ctrl('(')), just(Token::Ctrl(')')))
-                        .map_with_span(|args, span: Span| (args, span))
-                        .repeated(),
-                )
-                .foldl(|f, args| {
-                    let span = f.1.start..args.1.end;
-                    (Expr::Call(Box::new(f), args.0), span)
-                });
-
-            // Product ops (multiply and divide) have equal precedence
-            let op = just(Token::Op(Op::Mul))
-                .to(BinaryOp::Mul)
-                .or(just(Token::Op(Op::Div)).to(BinaryOp::Div));
-            let product = call
-                .clone()
-                .then(op.then(call).repeated())
-                .foldl(|a, (op, b)| {
-                    let span = a.1.start..b.1.end;
-                    (Expr::Binary(Box::new(a), op, Box::new(b)), span)
-                });
-
-            // Sum ops (add and subtract) have equal precedence
-            let op = just(Token::Op(Op::Add))
-                .to(BinaryOp::Add)
-                .or(just(Token::Op(Op::Sub)).to(BinaryOp::Sub));
-            let sum = product
-                .clone()
-                .then(op.then(product).repeated())
-                .foldl(|a, (op, b)| {
-                    let span = a.1.start..b.1.end;
-                    (Expr::Binary(Box::new(a), op, Box::new(b)), span)
-                });
-
-            // Comparison ops (equal, not-equal) have equal precedence
-            let op = just(Token::Op(Op::EqEq))
-                .to(BinaryOp::Eq)
-                .or(just(Token::Op(Op::NotEq)).to(BinaryOp::NotEq));
-            let compare = sum
-                .clone()
-                .then(op.then(sum).repeated())
-                .foldl(|a, (op, b)| {
-                    let span = a.1.start..b.1.end;
-                    (Expr::Binary(Box::new(a), op, Box::new(b)), span)
-                });
-
-            compare
-        });
-
-        // Blocks are expressions but delimited with braces
-        let block = expr
-            .clone()
-            .delimited_by(just(Token::Ctrl('{')), just(Token::Ctrl('}')))
-            // Attempt to recover anything that looks like a block but contains errors
-            .recover_with(nested_delimiters(
-                Token::Ctrl('{'),
-                Token::Ctrl('}'),
-                [
-                    (Token::Ctrl('('), Token::Ctrl(')')),
-                    (Token::Ctrl('['), Token::Ctrl(']')),
-                ],
-                |span| (Expr::Error, span),
-            ));
-
-        let if_ = recursive(|if_| {
-            just(Token::If)
-                .ignore_then(expr.clone())
-                .then(block.clone())
-                .then(
-                    just(Token::Else)
-                        .ignore_then(block.clone().or(if_))
-                        .or_not(),
-                )
-                .map_with_span(|((cond, a), b), span: Span| {
-                    (
-                        Expr::If(
-                            Box::new(cond),
-                            Box::new(a),
-                            Box::new(match b {
-                                Some(b) => b,
-                                // If an `if` expression has no trailing `else` block, we magic up one that just produces null
-                                None => (Expr::Value(Value::Null), span.clone()),
-                            }),
-                        ),
-                        span,
-                    )
-                })
-        });
-
-        // Both blocks and `if` are 'block expressions' and can appear in the place of statements
-        let block_expr = block.or(if_).labelled("block");
-
-        let block_chain = block_expr
-            .clone()
-            .then(block_expr.clone().repeated())
-            .foldl(|a, b| {
-                let span = a.1.start..b.1.end;
-                (Expr::Then(Box::new(a), Box::new(b)), span)
-            });
-
-        block_chain
-            // Expressions, chained by semicolons, are statements
-            .or(raw_expr.clone())
-            .then(just(Token::Ctrl(';')).ignore_then(expr.or_not()).repeated())
-            .foldl(|a, b| {
-                let span = a.1.clone(); // TODO: Not correct
-                (
-                    Expr::Then(
-                        Box::new(a),
-                        Box::new(match b {
-                            Some(b) => b,
-                            None => (Expr::Value(Value::Null), span.clone()),
-                        }),
-                    ),
-                    span,
-                )
-            })
-    })
-}
-
-impl Value {
-    fn num(self, span: Span) -> Result<f64, Error> {
-        if let Value::Real(x) = self {
-            Ok(x)
-        } else {
-            Err(Error {
-                span,
-                msg: format!("'{}' is not a number", self),
-            })
         }
     }
 }
@@ -1070,47 +823,6 @@ fn block_parser() -> impl Parser<Token, Vec<ast::Root>, Error = Simple<Token>> +
     })
 }
 
-// fn funcs_parser() -> impl Parser<Token, Vec<ast::Root>, Error = Simple<Token>> + Clone {
-//     // let ident = filter_map(|span, tok| match tok {
-//     //     Token::Ident(ident) => Ok(ident.clone()),
-//     //     _ => Err(Simple::expected_input_found(span, Vec::new(), Some(tok))),
-//     // });
-
-//     // // Argument lists are just identifiers separated by commas, surrounded by parentheses
-//     // let args = ident
-//     //     .clone()
-//     //     .separated_by(just(Token::Ctrl(',')))
-//     //     .allow_trailing()
-//     //     .delimited_by(just(Token::Ctrl('(')), just(Token::Ctrl(')')))
-//     //     .labelled("function args");
-
-//     // let func = just(Token::Fn)
-//     //     .ignore_then(identifier.labelled("function name"))
-//     //     .then(args)
-//     //     .then(
-//     //         expr_parser()
-//     //             .delimited_by(just(Token::Ctrl('{')), just(Token::Ctrl('}')))
-//     //             // Attempt to recover anything that looks like a function body but contains errors
-//     //             .recover_with(nested_delimiters(
-//     //                 Token::Ctrl('{'),
-//     //                 Token::Ctrl('}'),
-//     //                 [
-//     //                     (Token::Ctrl('('), Token::Ctrl(')')),
-//     //                     (Token::Ctrl('['), Token::Ctrl(']')),
-//     //                 ],
-//     //                 |span| (Expr::Error, span),
-//     //             )),
-//     //     )
-//     //     .map(|((name, args), body)| (name, Func { args, body }))
-//     //     .labelled("function");
-
-//     // func.map(|(name, func)| ast::Root::Function(ast::Function { name }))
-//     //     .or(import.map(|import| ast::Root::Import(import)))
-//     //     .or(block_parser().map(|block2| block2))
-//     //     .repeated()
-//     //     .then_ignore(end())
-// }
-
 pub struct ParseError {
     pub span: Span,
     pub msg: String,
@@ -1121,23 +833,10 @@ pub fn parse(file_name: String, src: &str) -> (Option<Vec<ast::Root>>, Vec<Parse
     let (tokens, errs) = lexer().parse_recovery(src);
 
     let (ast, parse_errs) = if let Some(tokens) = tokens {
-        //dbg!(tokens);
         let len = src.chars().count();
         let (ast, parse_errs) = block_parser()
             .then_ignore(end())
             .parse_recovery(Stream::from_iter(len..len + 1, tokens.into_iter()));
-
-        // if let Some(funcs) = ast.filter(|_| errs.len() + parse_errs.len() == 0) {
-        //     if let Some(main) = funcs.get("main") {
-        //         assert_eq!(main.args.len(), 0);
-        //         match eval_expr(&main.body, &funcs, &mut Vec::new()) {
-        //             Ok(val) => println!("Return value: {}", val),
-        //             Err(e) => errs.push(Simple::custom(e.span, e.msg)),
-        //         }
-        //     } else {
-        //         panic!("No main function!");
-        //     }
-        // }
 
         (ast, parse_errs)
     } else {
