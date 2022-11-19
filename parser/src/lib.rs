@@ -14,7 +14,9 @@ use crate::printer::AlertLevel;
 use std::io::{BufWriter, Write};
 
 use ast::{Span, USizeTuple};
+use graph::SymbolDefinition;
 use printer::SpannedAlert;
+use validator::{ExpandedType, TypedBody, TypedFunction, TypedFunctionParameter};
 #[cfg(feature = "wasm")]
 use wasm_bindgen::prelude::*;
 
@@ -63,7 +65,7 @@ pub struct File {
     pub ast: Option<Vec<ast::Root>>,
     pub validation: Vec<SpannedAlert>,
     pub alerts: Vec<Alert>,
-    pub generated: String,
+    pub typed: Option<TypedIntermediate>,
 }
 
 #[cfg_attr(feature = "wasm", wasm_bindgen)]
@@ -110,7 +112,7 @@ impl Environment {
                 ast: None,
                 validation: Vec::new(),
                 alerts: Vec::new(),
-                generated: String::new(),
+                typed: None,
             },
         );
     }
@@ -162,16 +164,19 @@ impl Environment {
     pub fn process_file(&mut self, name: &str) -> Result<(), ()> {
         let mut alerts = vec![];
 
-        let mut generated = String::new();
+        let mut typed = None;
+
         let file = self.files.get_mut(name).unwrap();
         if let Some(ref ast_ref) = file.ast {
             file.validation
                 .extend(self.graph.update_file_second_pass(name, ast_ref));
 
-            let (_alerts, typed) = validator::validate(&self.graph, name);
+            let (_alerts, _typed) = validator::validate(&self.graph, name);
             file.validation.extend(_alerts);
 
-            generated = generator::generate(&self.graph, name, &typed).javascript;
+            typed = Some(_typed);
+
+            // generated = generator::generate(&self.graph, name, &typed).javascript;
         } else {
             let ast = vec![];
             self.graph.update_file_second_pass(name, &ast);
@@ -250,8 +255,109 @@ impl Environment {
         }
 
         self.get_file(name).unwrap().alerts.extend(alerts);
-        self.get_file(name).unwrap().generated = generated;
+        self.get_file(name).unwrap().typed = typed;
 
         return Ok(());
+    }
+
+    pub fn generate_file(&mut self, name: &str) -> String {
+        let mut typed = TypedIntermediate {
+            functions: HashMap::new(),
+            structs: Vec::new(),
+        };
+
+        for (_, _type) in self.graph.primitive.iter() {
+            if let SymbolDefinition::Type(ref sym_type) = _type.definition {
+                for method in &sym_type.methods {
+                    let func_typed = TypedFunction {
+                        tagged: true,
+                        tagging: false,
+                        tags: method.1.tags.clone(),
+                        body: TypedBody {
+                            tags: vec![],
+                            statements: vec![],
+                        },
+                        javascript: method.1.javascript.clone(),
+                        name: method.0.clone(),
+                        parameters: method
+                            .1
+                            .parameters
+                            .iter()
+                            .map(|(name, _type, _)| TypedFunctionParameter {
+                                name: name.clone(),
+                                default_value: None,
+                                type_name: ExpandedType::from_string(&self.graph, name, _type),
+                            })
+                            .collect(),
+                        return_type: ExpandedType::from_string(
+                            &self.graph,
+                            name,
+                            method.1.return_type.as_ref().unwrap_or(&"void".to_string()),
+                        ),
+                    };
+                    typed
+                        .functions
+                        .insert(format!("__{}_{}", &_type.name, &method.0), func_typed);
+                }
+            }
+            if let SymbolDefinition::Function(ref sym_func) = _type.definition {
+                let func_typed = TypedFunction {
+                    tagged: true,
+                    tagging: false,
+                    tags: sym_func.tags.clone(),
+                    body: TypedBody {
+                        tags: vec![],
+                        statements: vec![],
+                    },
+                    javascript: sym_func.javascript.clone(),
+                    name: _type.name.clone(),
+                    parameters: sym_func
+                        .parameters
+                        .iter()
+                        .map(|(name, _type, _)| TypedFunctionParameter {
+                            name: name.clone(),
+                            default_value: None,
+                            type_name: ExpandedType::from_string(&self.graph, name, _type),
+                        })
+                        .collect(),
+                    return_type: ExpandedType::from_string(
+                        &self.graph,
+                        name,
+                        sym_func.return_type.as_ref().unwrap_or(&"void".to_string()),
+                    ),
+                };
+                typed
+                    .functions
+                    .insert(format!("{}", &_type.get_namespaced()), func_typed);
+            }
+        }
+
+        for file in self.files.values() {
+            if let Some(ref _typed) = file.typed {
+                typed.functions.extend(_typed.functions.clone());
+                typed.structs.extend(_typed.structs.clone());
+            }
+        }
+
+        let keys = typed.functions.keys().cloned().collect::<Vec<String>>();
+
+        for k in keys {
+            validator::tag_function(&mut typed, &k);
+        }
+
+        typed = typed.tree_shake(
+            &self.graph,
+            name,
+            &format!("{}_test", name.replace(".", "__")),
+        );
+
+        let mut generated = String::new();
+
+        let file = self.files.get_mut(name).unwrap();
+        if let Some(ref ast_ref) = file.ast {
+            generated = generator::generate(&self.graph, name, &typed).javascript;
+        }
+
+        return generated;
     }
 }

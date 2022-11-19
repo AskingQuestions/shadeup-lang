@@ -13,10 +13,17 @@ fn main() {
     env.set_file(
         "other.shadeup".to_owned(),
         "
+        fn test_add() -> int {
+            let a = 1;
+            let b = 2;
+            let c = a + b;
+            return c;
+        }
+
     fn add() -> int {
         let a = 1;
         let b = 2;
-        let c = a + b;
+        let c = a + b + test_add();
         return c;
     }
     "
@@ -33,7 +40,17 @@ fn main() {
     }
 
     fn test() -> int {
-        let a = 1;
+        print('test');
+        let a = add();
+
+        test();
+
+        let x = shader {
+            let b = 2;
+            let c = a + b;
+            let d = c + add();
+        };
+
         let b = Test {a: 2, b: 2};
         let c = b.a + 2.0;
 
@@ -56,11 +73,13 @@ return 2;
     let _ = env.process_file("other.shadeup");
     let _ = env.process_file("test.shadeup");
 
+    let generated = env.generate_file("test.shadeup");
+
     let file = env.get_file("test.shadeup").unwrap();
 
     let alerts = file.clone().alerts;
 
-    println!("{}", file.generated);
+    println!("{}", generated);
 
     for alert in alerts {
         println!("{}", alert.message());

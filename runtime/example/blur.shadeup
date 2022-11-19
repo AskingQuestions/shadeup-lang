@@ -1,0 +1,13 @@
+import Bricks from "bricks.png";
+
+main {
+	let tex = Bricks.texture();
+	let sampler = tex.sampler(RGBA | 8 | uint);
+	let out = texture2d<float>(Bricks.width, Bricks.height);
+
+	let convolve = shader {
+		out[coord.xy] = sampler[coord.xy * 0.5];
+	};`
+
+	Compute(convolve);
+}

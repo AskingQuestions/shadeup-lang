@@ -3,6 +3,7 @@ use wasm_bindgen::prelude::*;
 
 use crate::ast::{self, Expression, Location, Span, USizeTuple};
 use crate::printer::SpannedAlert;
+use crate::validator::{TypedTag, TypedTagType};
 use std::collections::HashMap;
 
 type SymbolRef = String;
@@ -12,6 +13,7 @@ pub struct SymbolFunction {
     pub parameters: Vec<(String, SymbolRef, bool)>,
     pub return_type: Option<SymbolRef>,
     pub javascript: Option<String>,
+    pub tags: Vec<TypedTag>,
 }
 
 #[derive(Debug, Clone)]
@@ -44,7 +46,9 @@ impl SymbolDefinition {
 
 #[derive(Debug, Clone)]
 pub struct SymbolNode {
+    pub imported: bool,
     pub name: String,
+    pub real_name: String,
     pub definition: SymbolDefinition,
     pub root: ast::Root,
     pub file: String,
@@ -59,7 +63,7 @@ impl SymbolNode {
                 .replace("/", "_")
                 .replace(".", "__")
                 .replace("-", "___"),
-            self.name
+            self.real_name
         )
     }
 }
@@ -87,7 +91,9 @@ impl SymbolGraph {
                 self.primitive.insert(
                     $name.to_owned(),
                     SymbolNode {
+                        imported: false,
                         name: $name.to_string(),
+                        real_name: $name.to_string(),
                         definition: SymbolDefinition::Type(SymbolType {
                             fields: Vec::new(),
                             methods: $methods,
@@ -99,6 +105,29 @@ impl SymbolGraph {
                 )
             };
         }
+
+        self.primitive.insert(
+            "print".to_owned(),
+            SymbolNode {
+                imported: false,
+                name: "print".to_string(),
+                real_name: "print".to_string(),
+                definition: SymbolDefinition::Function(SymbolFunction {
+                    parameters: vec![("value".to_string(), "string".to_string(), false)],
+                    return_type: None,
+                    javascript: Some("console.log(value)".to_string()),
+                    tags: vec![TypedTag {
+                        tag: TypedTagType::CPUOnly,
+                        span: 0..0,
+                        name: "print".to_string(),
+                        introduced_by: None,
+                    }],
+                }),
+                file: "primitives".to_string(),
+                span: Span { start: 0, end: 0 },
+                root: ast::Root::Error,
+            },
+        );
 
         macro_rules! add_scalar {
             ($name:expr, $mask:expr) => {
@@ -113,6 +142,7 @@ impl SymbolGraph {
                                 ],
                                 return_type: Some(type_name.clone()),
                                 javascript: Some(format!("return (__this + other){};", $mask)),
+                                tags: Vec::new(),
                             },
                         ),
                         (
@@ -124,6 +154,7 @@ impl SymbolGraph {
                                 ],
                                 return_type: Some(type_name.clone()),
                                 javascript: Some(format!("return (__this - other){};", $mask)),
+                                tags: Vec::new(),
                             },
                         ),
                         (
@@ -135,6 +166,7 @@ impl SymbolGraph {
                                 ],
                                 return_type: Some(type_name.clone()),
                                 javascript: Some(format!("return (__this / other){};", $mask)),
+                                tags: Vec::new(),
                             },
                         ),
                         (
@@ -146,6 +178,7 @@ impl SymbolGraph {
                                 ],
                                 return_type: Some(type_name.clone()),
                                 javascript: Some(format!("return (__this * other){};", $mask)),
+                                tags: Vec::new(),
                             },
                         ),
                         (
@@ -157,6 +190,7 @@ impl SymbolGraph {
                                 ],
                                 return_type: Some(type_name.clone()),
                                 javascript: Some(format!("return (__this % other){};", $mask)),
+                                tags: Vec::new(),
                             },
                         ),
                         (
@@ -168,6 +202,7 @@ impl SymbolGraph {
                                 ],
                                 return_type: Some("bool".to_string()),
                                 javascript: Some("return __this === other;".to_string()),
+                                tags: Vec::new(),
                             },
                         ),
                         (
@@ -179,6 +214,7 @@ impl SymbolGraph {
                                 ],
                                 return_type: Some("bool".to_string()),
                                 javascript: Some("return __this !== other;".to_string()),
+                                tags: Vec::new(),
                             },
                         ),
                         (
@@ -190,6 +226,7 @@ impl SymbolGraph {
                                 ],
                                 return_type: Some("bool".to_string()),
                                 javascript: Some("return __this < other;".to_string()),
+                                tags: Vec::new(),
                             },
                         ),
                         (
@@ -201,6 +238,7 @@ impl SymbolGraph {
                                 ],
                                 return_type: Some("bool".to_string()),
                                 javascript: Some("return __this > other;".to_string()),
+                                tags: Vec::new(),
                             },
                         ),
                         (
@@ -212,6 +250,7 @@ impl SymbolGraph {
                                 ],
                                 return_type: Some("bool".to_string()),
                                 javascript: Some("return __this <= other;".to_string()),
+                                tags: Vec::new(),
                             },
                         ),
                         (
@@ -223,6 +262,7 @@ impl SymbolGraph {
                                 ],
                                 return_type: Some("bool".to_string()),
                                 javascript: Some("return __this >= other;".to_string()),
+                                tags: Vec::new(),
                             },
                         ),
                         (
@@ -234,6 +274,7 @@ impl SymbolGraph {
                                 ],
                                 return_type: Some("bool".to_string()),
                                 javascript: None,
+                                tags: Vec::new(),
                             },
                         ),
                         (
@@ -242,6 +283,7 @@ impl SymbolGraph {
                                 parameters: vec![("other".to_owned(), type_name.clone(), false)],
                                 return_type: Some(type_name.clone()),
                                 javascript: Some(format!("return other{};", $mask)),
+                                tags: Vec::new(),
                             },
                         ),
                     ]
@@ -269,6 +311,7 @@ impl SymbolGraph {
                                 ],
                                 return_type: Some(single_name.clone()),
                                 javascript: Some(gen_op_on_fields("*")),
+                                tags: Vec::new(),
                             },
                         ),
                         (
@@ -280,6 +323,7 @@ impl SymbolGraph {
                                 ],
                                 return_type: Some(type_name.clone()),
                                 javascript: Some(gen_op_on_fields("+")),
+                                tags: Vec::new(),
                             },
                         ),
                         (
@@ -291,6 +335,7 @@ impl SymbolGraph {
                                 ],
                                 return_type: Some(type_name.clone()),
                                 javascript: Some(gen_op_on_fields("-")),
+                                tags: Vec::new(),
                             },
                         ),
                         (
@@ -302,6 +347,7 @@ impl SymbolGraph {
                                 ],
                                 return_type: Some(type_name.clone()),
                                 javascript: Some(gen_op_on_fields("/")),
+                                tags: Vec::new(),
                             },
                         ),
                         (
@@ -313,6 +359,7 @@ impl SymbolGraph {
                                 ],
                                 return_type: Some(type_name.clone()),
                                 javascript: Some(gen_op_on_fields("*")),
+                                tags: Vec::new(),
                             },
                         ),
                         (
@@ -324,6 +371,7 @@ impl SymbolGraph {
                                 ],
                                 return_type: Some(type_name.clone()),
                                 javascript: Some(gen_op_on_fields("%")),
+                                tags: Vec::new(),
                             },
                         ),
                         (
@@ -335,6 +383,7 @@ impl SymbolGraph {
                                 ],
                                 return_type: Some("bool".to_string()),
                                 javascript: None,
+                                tags: Vec::new(),
                             },
                         ),
                         (
@@ -349,6 +398,7 @@ impl SymbolGraph {
                                         .collect::<Vec<String>>()
                                         .join(", ")
                                 )),
+                                tags: Vec::new(),
                             },
                         ),
                     ]
@@ -464,6 +514,7 @@ impl SymbolGraph {
                         hmap.insert(
                             name,
                             SymbolNode {
+                                imported: false,
                                 file: file_name.to_owned(),
                                 root: ast::Root::Struct(struct_.clone()),
                                 definition: SymbolDefinition::Type(SymbolType {
@@ -475,6 +526,7 @@ impl SymbolGraph {
                                         .collect(),
                                 }),
                                 name: struct_.name.name.clone(),
+                                real_name: struct_.name.name.clone(),
                                 span: struct_.name.span.clone(),
                             },
                         );
@@ -494,10 +546,12 @@ impl SymbolGraph {
                         hmap.insert(
                             name,
                             SymbolNode {
+                                imported: false,
                                 file: file_name.to_owned(),
                                 root: ast::Root::Function(function.clone()),
                                 definition: SymbolDefinition::Function(SymbolFunction {
                                     javascript: None,
+                                    tags: Vec::new(),
                                     parameters: function
                                         .parameters
                                         .iter()
@@ -512,6 +566,7 @@ impl SymbolGraph {
                                     },
                                 }),
                                 name: function.name.name.clone(),
+                                real_name: function.name.name.clone(),
                                 span: function.name.span.clone(),
                             },
                         );
@@ -653,8 +708,10 @@ impl SymbolGraph {
                                     add_alert(alert);
                                 } else {
                                     let symbol = file.get(name.as_str()).unwrap();
-
-                                    hmap.insert(alias.clone(), symbol.clone());
+                                    let mut symbol_clone = symbol.clone();
+                                    symbol_clone.name = alias.clone();
+                                    symbol_clone.imported = true;
+                                    hmap.insert(alias.clone(), symbol_clone);
                                 }
                             }
                         }
@@ -692,6 +749,7 @@ impl SymbolGraph {
                                             function.name.name.clone(),
                                             SymbolFunction {
                                                 javascript: None,
+                                                tags: Vec::new(),
                                                 parameters: function
                                                     .parameters
                                                     .clone()

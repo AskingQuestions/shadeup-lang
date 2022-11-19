@@ -11,7 +11,7 @@ pub struct ProgramOutput {
 
 fn gen_expression_local(graph: &SymbolGraph, file_name: &str, expr: &TypedExpression) -> String {
     match expr {
-        TypedExpression::Value(value) => match value {
+        TypedExpression::Value(value, _) => match value {
             TypedValue::Int(ival) => format!("({} & 0xffffffff)", ival),
             TypedValue::String(sval) => format!("\"{}\"", sval.replace('"', "\\\"")),
             TypedValue::Bool(bval) => format!("{}", bval),
@@ -20,8 +20,8 @@ fn gen_expression_local(graph: &SymbolGraph, file_name: &str, expr: &TypedExpres
             TypedValue::Error => "/* !error value */".to_string(),
         },
         TypedExpression::Error() => "/* !error */".to_string(),
-        TypedExpression::Identifier(ident) => ident.clone(),
-        TypedExpression::Call(call, exprs) => {
+        TypedExpression::Identifier(ident, _) => ident.clone(),
+        TypedExpression::Call(call, exprs, _) => {
             let mut args = String::new();
 
             for arg in exprs {
@@ -36,7 +36,7 @@ fn gen_expression_local(graph: &SymbolGraph, file_name: &str, expr: &TypedExpres
 
             format!("{}({})", call, args)
         }
-        TypedExpression::KVMap(map) => {
+        TypedExpression::KVMap(map, _) => {
             let mut entries = String::new();
 
             for (key, value) in map {
@@ -54,6 +54,9 @@ fn gen_expression_local(graph: &SymbolGraph, file_name: &str, expr: &TypedExpres
 
             format!("{{{}}}", entries)
         }
+        TypedExpression::Shader(inst, _) => {
+            format!("/* !shader */{{}}")
+        }
     }
 }
 
@@ -62,14 +65,14 @@ fn gen_body_local(graph: &SymbolGraph, file_name: &str, body: &TypedBody) -> Str
 
     for root in &body.statements {
         let line: String = match root {
-            TypedStatement::Let { name, value } => {
+            TypedStatement::Let { name, value, span } => {
                 format!(
                     "let {} = {};",
                     name,
                     gen_expression_local(graph, file_name, &value)
                 )
             }
-            TypedStatement::Expression(expr) => {
+            TypedStatement::Expression(expr, _) => {
                 format!("{};", gen_expression_local(graph, file_name, &expr))
             }
             TypedStatement::If {
@@ -77,6 +80,7 @@ fn gen_body_local(graph: &SymbolGraph, file_name: &str, body: &TypedBody) -> Str
                 body,
                 else_body,
                 else_ifs,
+                span,
             } => {
                 let mut out = String::new();
 
@@ -110,7 +114,7 @@ fn gen_body_local(graph: &SymbolGraph, file_name: &str, body: &TypedBody) -> Str
 
                 out
             }
-            TypedStatement::Return(_return) => {
+            TypedStatement::Return(_return, _) => {
                 format!(
                     "return {};",
                     gen_expression_local(graph, file_name, &_return)
