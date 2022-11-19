@@ -38,17 +38,17 @@ pub fn get_line_text(source: &str, line: usize) -> &str {
 pub fn format_pretty_alert(
     source: &str,
     location: Location,
-    level: AlertLevel,
-    message: &str,
+    _level: AlertLevel,
+    _message: &str,
 ) -> String {
-    let USizeTuple(line, column) = location.get_start_line_and_column(source);
-    let line_text = get_line_text(source, line);
+    let USizeTuple(line, _column) = location.get_start_line_and_column(source);
+    let _line_text = get_line_text(source, line);
 
     let line_number_str = line.to_string();
     let line_number_str_len = line_number_str.len();
 
-    let empty_line = " ".repeat(line_number_str_len) + " | ";
-    let line_number = line_number_str + " | ";
+    let _empty_line = " ".repeat(line_number_str_len) + " | ";
+    let _line_number = line_number_str + " | ";
 
     // return format!(
     //     "{}: {}\n{}{} {}:{}:{}\n{}\n{}{}\n{}{}{}",

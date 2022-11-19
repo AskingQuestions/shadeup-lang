@@ -1,11 +1,11 @@
-use ariadne::{Color, ColorGenerator, Fmt, Label, Report, ReportKind, Source};
-use chumsky::combinator::Repeated;
+use ariadne::{Color, Fmt, Label, Report, ReportKind, Source};
+
 use chumsky::{prelude::*, stream::Stream};
 use std::io::{BufWriter, Write};
 use std::str;
-use std::{collections::HashMap, env, fmt, fs};
+use std::{fmt};
 
-use crate::ast::{self, Identifier, Op, Value};
+use crate::ast::{self, Op, Value};
 
 pub type Span = std::ops::Range<usize>;
 
@@ -496,7 +496,7 @@ fn block_parser() -> impl Parser<Token, Vec<ast::Root>, Error = Simple<Token>> +
         .then_ignore(just(Token::From))
         .then(string_literal.clone().labelled("path"))
         .then_ignore(just(Token::Ctrl(';')))
-        .map_with_span(|(names, path), span| ast::Import { name: names, path })
+        .map_with_span(|(names, path), _span| ast::Import { name: names, path })
         .labelled("import");
 
     recursive::<_, Vec<ast::Root>, _, _, _>(|block_recur| {
@@ -523,7 +523,7 @@ fn block_parser() -> impl Parser<Token, Vec<ast::Root>, Error = Simple<Token>> +
                         (Token::Ctrl('('), Token::Ctrl(')')),
                         (Token::Ctrl('['), Token::Ctrl(']')),
                     ],
-                    |span| Token::Fn,
+                    |_span| Token::Fn,
                 )),
             ))
             // Attempt to recover anything that looks like a function body but contains errors
@@ -872,7 +872,7 @@ fn block_parser() -> impl Parser<Token, Vec<ast::Root>, Error = Simple<Token>> +
                             (Token::Ctrl('('), Token::Ctrl(')')),
                             (Token::Ctrl('['), Token::Ctrl(']')),
                         ],
-                        |span: Span| vec![],
+                        |_span: Span| vec![],
                     ))
                     .map_with_span(|roots, span| ast::Block {
                         roots: roots,
@@ -898,7 +898,7 @@ fn block_parser() -> impl Parser<Token, Vec<ast::Root>, Error = Simple<Token>> +
                                                 (Token::Ctrl('('), Token::Ctrl(')')),
                                                 (Token::Ctrl('['), Token::Ctrl(']')),
                                             ],
-                                            |span: Span| vec![],
+                                            |_span: Span| vec![],
                                         )),
                                 )
                                 .map_with_span(|(condition, roots), span| ast::If {
@@ -998,7 +998,7 @@ fn block_parser() -> impl Parser<Token, Vec<ast::Root>, Error = Simple<Token>> +
                             (Token::Ctrl('('), Token::Ctrl(')')),
                             (Token::Ctrl('['), Token::Ctrl(']')),
                         ],
-                        |span: Span| vec![],
+                        |_span: Span| vec![],
                     )),
             )
             .map_with_span(|(name, body), span| ast::Root::Impl(ast::Impl { name, body, span }))
@@ -1118,7 +1118,7 @@ pub struct ParseError {
 }
 
 pub fn parse(file_name: String, src: &str) -> (Option<Vec<ast::Root>>, Vec<ParseError>) {
-    let (tokens, mut errs) = lexer().parse_recovery(src);
+    let (tokens, errs) = lexer().parse_recovery(src);
 
     let (ast, parse_errs) = if let Some(tokens) = tokens {
         //dbg!(tokens);
@@ -1216,7 +1216,7 @@ pub fn parse(file_name: String, src: &str) -> (Option<Vec<ast::Root>>, Vec<Parse
             };
 
             let simple_msg = match e.reason() {
-                chumsky::error::SimpleReason::Unclosed { span, delimiter } => {
+                chumsky::error::SimpleReason::Unclosed { span: _, delimiter } => {
                     format!(
                         "Unclosed delimiter {}, must be closed before {}",
                         delimiter,

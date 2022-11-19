@@ -1,8 +1,8 @@
-use crate::ast::{self, Expression, Identifier, Location, Op, Span, USizeTuple};
-use crate::graph::{SymbolDefinition, SymbolGraph, SymbolNode, SymbolType};
-use crate::printer::SpannedAlert;
+
+use crate::graph::{SymbolGraph};
+
 use crate::validator::{
-    self, TypedBody, TypedExpression, TypedIntermediate, TypedStatement, TypedValue,
+    TypedBody, TypedExpression, TypedIntermediate, TypedStatement, TypedValue,
 };
 
 pub struct ProgramOutput {
@@ -54,7 +54,7 @@ fn gen_expression_local(graph: &SymbolGraph, file_name: &str, expr: &TypedExpres
 
             format!("{{{}}}", entries)
         }
-        TypedExpression::Shader(inst, _) => {
+        TypedExpression::Shader(_inst, _) => {
             format!("/* !shader */{{}}")
         }
     }
@@ -65,7 +65,7 @@ fn gen_body_local(graph: &SymbolGraph, file_name: &str, body: &TypedBody) -> Str
 
     for root in &body.statements {
         let line: String = match root {
-            TypedStatement::Let { name, value, span } => {
+            TypedStatement::Let { name, value, span: _ } => {
                 format!(
                     "let {} = {};",
                     name,
@@ -80,7 +80,7 @@ fn gen_body_local(graph: &SymbolGraph, file_name: &str, body: &TypedBody) -> Str
                 body,
                 else_body,
                 else_ifs,
-                span,
+                span: _,
             } => {
                 let mut out = String::new();
 
@@ -133,7 +133,7 @@ pub fn generate(graph: &SymbolGraph, file_name: &str, typed: &TypedIntermediate)
     let mut javascript = String::new();
     let file = graph.files.get(file_name);
 
-    let file = file.unwrap();
+    let _file = file.unwrap();
 
     for _struct in &typed.structs {
         let mut out = String::new();

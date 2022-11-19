@@ -1,7 +1,7 @@
 #[cfg(feature = "wasm")]
 use wasm_bindgen::prelude::*;
 
-use crate::ast::{self, Expression, Location, Span, USizeTuple};
+use crate::ast::{self, Location, Span, USizeTuple};
 use crate::printer::SpannedAlert;
 use crate::validator::{TypedTag, TypedTagType};
 use std::collections::HashMap;
@@ -497,7 +497,7 @@ impl SymbolGraph {
 
         for root in roots {
             match root {
-                ast::Root::Import(import) => {
+                ast::Root::Import(_import) => {
                     // Handled in second pass
                 }
                 ast::Root::Struct(struct_) => {
@@ -577,7 +577,7 @@ impl SymbolGraph {
             }
         }
 
-        let mut file = self
+        let file = self
             .files
             .entry(file_name.to_string())
             .or_insert(HashMap::new());
@@ -718,7 +718,7 @@ impl SymbolGraph {
                     }
                 }
                 ast::Root::Impl(_impl) => {
-                    let mut this_file = self.files.get_mut(file_name).unwrap();
+                    let this_file = self.files.get_mut(file_name).unwrap();
                     let name = _impl.name.name.clone();
                     if self.primitive.contains_key(name.as_str()) {
                         add_alert(SpannedAlert::error(
@@ -791,7 +791,7 @@ impl SymbolGraph {
             }
         }
 
-        let mut file = self
+        let file = self
             .files
             .entry(file_name.to_string())
             .or_insert(HashMap::new());

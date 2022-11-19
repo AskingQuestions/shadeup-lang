@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
-use chumsky::primitive::Container;
 
-use crate::ast::{self, Expression, Identifier, Impl, Location, Op, Span, USizeTuple};
-use crate::graph::{SymbolDefinition, SymbolGraph, SymbolNode, SymbolType};
+
+use crate::ast::{self, Expression, Location, Op, Span, USizeTuple};
+use crate::graph::{SymbolDefinition, SymbolGraph, SymbolType};
 use crate::printer::SpannedAlert;
 
 pub struct Scope<'a> {
@@ -166,9 +166,9 @@ fn shake_expression(
             }
         }
         TypedExpression::Value(_, _) => {}
-        TypedExpression::Identifier(ident, _) => {}
+        TypedExpression::Identifier(_ident, _) => {}
         TypedExpression::KVMap(_, _) => {}
-        TypedExpression::Shader(_, span) => {}
+        TypedExpression::Shader(_, _span) => {}
         TypedExpression::Error() => {}
     }
 }
@@ -184,13 +184,13 @@ fn shake_body(
 ) {
     for statement in &typed_body.statements {
         match statement {
-            TypedStatement::Return(_, span) => {}
+            TypedStatement::Return(_, _span) => {}
             TypedStatement::If {
                 condition,
                 body,
                 else_ifs,
                 else_body,
-                span,
+                span: _,
             } => {
                 shake_expression(
                     graph,
@@ -237,7 +237,7 @@ fn shake_body(
                     );
                 }
             }
-            TypedStatement::Let { name, value, span } => {
+            TypedStatement::Let { name: _, value, span: _ } => {
                 shake_expression(
                     graph,
                     new_scope,
@@ -399,7 +399,7 @@ fn check_method_local<'a>(
     file_name: &str,
     span: &Span,
     symbol: &SymbolType,
-    generics: &Vec<ExpandedType>,
+    _generics: &Vec<ExpandedType>,
     method_name: &str,
     args: &Vec<ExpandedType>,
 ) -> String {
@@ -990,7 +990,7 @@ fn build_shader_instance(
                 body,
                 else_ifs,
                 else_body,
-                span,
+                span: _,
             } => {
                 build_shader_expression(
                     _alerts,
@@ -1042,7 +1042,7 @@ fn build_shader_instance(
                     );
                 }
             }
-            TypedStatement::Let { name, value, span } => {
+            TypedStatement::Let { name: _, value, span: _ } => {
                 build_shader_expression(
                     _alerts,
                     graph,
@@ -1299,7 +1299,7 @@ fn check_body_local(
                     ));
                 } else {
                     let mut _to_val = "void".to_owned();
-                    let mut _to_typed_expr = TypedExpression::Value(TypedValue::Null, (0..0));
+                    let mut _to_typed_expr = TypedExpression::Value(TypedValue::Null, 0..0);
                     if _let.to.is_some() {
                         (_to_val, _to_typed_expr) = get_type_local(
                             _alerts,
@@ -1525,7 +1525,7 @@ pub fn validate<'a>(
 
     // };
 
-    let check_body = |_alerts: &mut Vec<SpannedAlert>,
+    let _check_body = |_alerts: &mut Vec<SpannedAlert>,
                       scope: &mut Scope,
                       body: &Vec<ast::Root>,
                       intermediate: &mut TypedIntermediate,
@@ -1815,7 +1815,7 @@ pub fn propagate_tags(intermediate: &mut TypedIntermediate, body: &TypedBody) ->
                 body,
                 else_ifs,
                 else_body,
-                span,
+                span: _,
             } => {
                 tags.append(&mut propagate_tags_from_expression(intermediate, condition));
                 tags.append(&mut propagate_tags(intermediate, body));
@@ -1830,7 +1830,7 @@ pub fn propagate_tags(intermediate: &mut TypedIntermediate, body: &TypedBody) ->
                     tags.append(&mut propagate_tags(intermediate, else_body));
                 }
             }
-            TypedStatement::Let { name, value, span } => {
+            TypedStatement::Let { name: _, value, span: _ } => {
                 tags.append(&mut propagate_tags_from_expression(intermediate, value));
             }
             TypedStatement::Expression(expr, _) => {

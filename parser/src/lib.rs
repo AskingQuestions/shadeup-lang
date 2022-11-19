@@ -148,7 +148,7 @@ impl Environment {
 
         if ast.is_some() {
             let ast_ref = ast.as_ref().unwrap();
-            let mut validation_errors = self.graph.update_file_first_pass(name, ast_ref);
+            let validation_errors = self.graph.update_file_first_pass(name, ast_ref);
             file.ast = ast;
             file.validation.extend(validation_errors);
         } else {
@@ -354,7 +354,7 @@ impl Environment {
         let mut generated = String::new();
 
         let file = self.files.get_mut(name).unwrap();
-        if let Some(ref ast_ref) = file.ast {
+        if let Some(ref _ast_ref) = file.ast {
             generated = generator::generate(&self.graph, name, &typed).javascript;
         }
 

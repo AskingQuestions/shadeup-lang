@@ -2,7 +2,7 @@
 use wasm_bindgen::prelude::*;
 
 use std::fmt;
-use std::fmt::{Debug, Error, Formatter};
+use std::fmt::{Debug};
 
 use std::vec::Vec;
 
