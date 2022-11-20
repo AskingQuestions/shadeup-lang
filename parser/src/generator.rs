@@ -1,6 +1,7 @@
 use crate::graph::SymbolGraph;
 
 use crate::validator::{TypedBody, TypedExpression, TypedIntermediate, TypedStatement, TypedValue};
+use crate::webgl;
 
 pub struct ProgramOutput {
     pub javascript: String,
@@ -51,8 +52,16 @@ fn gen_expression_local(graph: &SymbolGraph, file_name: &str, expr: &TypedExpres
 
             format!("{{{}}}", entries)
         }
-        TypedExpression::Shader(_inst, _) => {
-            format!("/* !shader */{{}}")
+        TypedExpression::Shader(inst, _) => {
+            format!(
+                "__SHADERS[{}].instance({})",
+                inst.shader,
+                inst.closure
+                    .iter()
+                    .map(|(name, _)| format!("{}", name))
+                    .collect::<Vec<String>>()
+                    .join(", ")
+            )
         }
     }
 }
@@ -68,13 +77,13 @@ fn gen_body_local(graph: &SymbolGraph, file_name: &str, body: &TypedBody) -> Str
                 span: _,
             } => {
                 format!(
-                    "let {} = {};",
+                    "let {} = {};\n",
                     name,
                     gen_expression_local(graph, file_name, &value)
                 )
             }
             TypedStatement::Expression(expr, _) => {
-                format!("{};", gen_expression_local(graph, file_name, &expr))
+                format!("{};\n", gen_expression_local(graph, file_name, &expr))
             }
             TypedStatement::If {
                 condition,
@@ -86,7 +95,7 @@ fn gen_body_local(graph: &SymbolGraph, file_name: &str, body: &TypedBody) -> Str
                 let mut out = String::new();
 
                 out.push_str(&format!(
-                    "if ({}) {{",
+                    "if ({}) {{\n",
                     gen_expression_local(graph, file_name, &condition)
                 ));
 
@@ -94,7 +103,7 @@ fn gen_body_local(graph: &SymbolGraph, file_name: &str, body: &TypedBody) -> Str
 
                 for elif in else_ifs {
                     out.push_str(&format!(
-                        "}} else if ({}) {{",
+                        "\n}} else if ({}) {{\n",
                         gen_expression_local(graph, file_name, &elif.0)
                     ));
 
@@ -102,7 +111,7 @@ fn gen_body_local(graph: &SymbolGraph, file_name: &str, body: &TypedBody) -> Str
                 }
 
                 if else_body.is_some() {
-                    out.push_str("} else {");
+                    out.push_str("\n} else {\n");
 
                     out.push_str(&gen_body_local(
                         graph,
@@ -117,7 +126,7 @@ fn gen_body_local(graph: &SymbolGraph, file_name: &str, body: &TypedBody) -> Str
             }
             TypedStatement::Return(_return, _) => {
                 format!(
-                    "return {};",
+                    "return {};\n",
                     gen_expression_local(graph, file_name, &_return)
                 )
             }
@@ -135,34 +144,57 @@ pub fn generate(graph: &SymbolGraph, file_name: &str, typed: &TypedIntermediate)
 
     let _file = file.unwrap();
 
-    for _struct in &typed.structs {
-        let mut out = String::new();
+    javascript.push_str(&format!("const __SHADERS = [\n"));
 
-        out.push_str(&format!(
-            "function __make_struct_{}(fields) {{return {{",
-            _struct.0
+    for shader in &typed.shaders {
+        let shaken = typed.tree_shake_shader(graph, file_name, shader.clone());
+        javascript.push_str(&format!(
+            "  __shadeup_gen_shader(`{}`),\n",
+            webgl::generate(graph, file_name, &shaken).webgl
         ));
-
-        for field in &_struct.1 {
-            out.push_str(&format!("{}: fields.{}, ", field, field));
-        }
-
-        out.push_str("}");
-        out.push_str("}");
-
-        for field in &_struct.1 {
-            out.push_str(&format!(
-                "function __get_struct_{}_{}(struct) {{return struct.{};}}",
-                _struct.0, field, field
-            ));
-        }
-
-        javascript.push_str(&out);
     }
 
+    javascript.push_str(&format!("\n];\n\n"));
+
+    // for _struct in &typed.structs {
+    //     let mut out = String::new();
+
+    //     out.push_str(&format!(
+    //         "function __make_struct_{}(fields) {{\nreturn {{\n",
+    //         _struct.0
+    //     ));
+
+    //     for (field, _) in &_struct.1 {
+    //         out.push_str(&format!("  {}: fields.{}, ", field, field));
+    //     }
+
+    //     out.push_str("\n}");
+    //     out.push_str("\n}\n\n");
+
+    //     for (field, _) in &_struct.1 {
+    //         out.push_str(&format!(
+    //             "function __get_struct_{}_{}(struct) {{\nreturn struct.{};\n}}",
+    //             _struct.0, field, field
+    //         ));
+    //     }
+
+    //     javascript.push_str(&out);
+    // }
+
     for func in &typed.functions {
+        if func.1.tags.len() > 0 {
+            javascript.push_str(&format!(
+                "/* {} */",
+                func.1
+                    .tags
+                    .iter()
+                    .map(|t| format!("{}", t.tag.to_string()))
+                    .collect::<Vec<String>>()
+                    .join(" ")
+            ));
+        }
         javascript.push_str(&format!(
-            "function {}({}) {{",
+            "function {}({}) {{\n",
             func.0,
             func.1
                 .parameters
@@ -178,7 +210,7 @@ pub fn generate(graph: &SymbolGraph, file_name: &str, typed: &TypedIntermediate)
             javascript.push_str(&gen_body_local(graph, file_name, &func.1.body));
         }
 
-        javascript.push_str("}");
+        javascript.push_str("\n}\n\n");
     }
 
     ProgramOutput { javascript }

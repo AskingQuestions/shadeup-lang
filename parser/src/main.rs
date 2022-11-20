@@ -1,3 +1,5 @@
+use std::{fs, time::Instant};
+
 use crate::environment::Environment;
 
 mod ast;
@@ -7,8 +9,9 @@ mod graph;
 mod parser2;
 mod printer;
 mod validator;
+mod webgl;
 
-fn main() {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut env = Environment::new();
 
     env.set_file(
@@ -31,52 +34,34 @@ fn main() {
         .to_string(),
     );
 
-    env.set_file(
-        "test.shadeup".to_owned(),
-        "
-        import add from 'other.shadeup';
-    struct Test {
-        a: int
-        b: uint
-    }
+    let path = std::env::current_dir()?;
 
-    fn test() -> int {
-        print('test');
-        let a = add();
+    let start = Instant::now();
 
-        test();
+    let source = fs::read_to_string(path.to_str().unwrap().to_owned() + "/src/test.shadeup")
+        .expect("Something went wrong reading the file");
 
-        let x = shader {
-            let b = 2;
-            let c = a + b;
-            let d = c + add();
-        };
-
-        let b = Test {a: 2, b: 2};
-        let c = b.a + 2.0;
-
-        if (a >= 1) {
-            let d = 2;
-            return 3;
-        } else if (true) {
-            return 1;
-        }else{
-return 2;
-        }
-    }
-    "
-        .to_string(),
-    );
+    env.set_file("test.shadeup".to_owned(), source);
 
     let _ = env.parse_file("test.shadeup");
     let _ = env.parse_file("other.shadeup");
 
+    let duration = start.elapsed();
+
+    let proc = Instant::now();
+
     let _ = env.process_file("other.shadeup");
     let _ = env.process_file("test.shadeup");
+
+    let proc_duration = proc.elapsed();
+
+    let gen = Instant::now();
 
     let generated = env.generate_file("test.shadeup");
 
     let file = env.get_file("test.shadeup").unwrap();
+
+    let gen_duration = gen.elapsed();
 
     let alerts = file.clone().alerts;
 
@@ -85,4 +70,13 @@ return 2;
     for alert in alerts {
         println!("{}", alert.message());
     }
+
+    let total = start.elapsed();
+
+    println!("Parse: {:?}", duration);
+    println!("Process: {:?}", proc_duration);
+    println!("Generate: {:?}", gen_duration);
+    println!("Total: {:?}", total);
+
+    Ok(())
 }

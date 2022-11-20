@@ -24,7 +24,14 @@ pub enum TypedValue {
 #[derive(Clone)]
 pub struct TypedShaderInstance {
     pub closure: HashMap<String, String>,
+    pub shader: usize,
+}
+
+#[derive(Clone)]
+pub struct TypedShaderDefinition {
+    pub parameters: HashMap<String, String>,
     pub functions: HashMap<String, bool>,
+    pub body: TypedBody,
 }
 
 #[derive(Clone)]
@@ -97,6 +104,18 @@ pub enum TypedTagType {
     Recursive,
 }
 
+impl ToString for TypedTagType {
+    fn to_string(&self) -> String {
+        match self {
+            TypedTagType::Async => "async".to_string(),
+            TypedTagType::DynamicAlloc => "dynamic_alloc".to_string(),
+            TypedTagType::CPUOnly => "cpu_only".to_string(),
+            TypedTagType::ShaderOnly => "shader_only".to_string(),
+            TypedTagType::Recursive => "recursive".to_string(),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct TypedTag {
     pub tag: TypedTagType,
@@ -126,7 +145,8 @@ pub struct TypedFunction {
 #[derive(Clone)]
 pub struct TypedIntermediate {
     pub functions: HashMap<String, TypedFunction>,
-    pub structs: Vec<(String, Vec<String>)>,
+    pub structs: Vec<(String, Vec<(String, String)>)>,
+    pub shaders: Vec<TypedShaderDefinition>,
 }
 
 fn shake_expression(
@@ -275,7 +295,8 @@ impl TypedIntermediate {
     ) -> TypedIntermediate {
         let mut out = TypedIntermediate {
             functions: HashMap::new(),
-            structs: Vec::new(),
+            structs: self.structs.clone(),
+            shaders: self.shaders.clone(),
         };
 
         out.functions
@@ -291,6 +312,46 @@ impl TypedIntermediate {
             &mut out,
             &self.functions[root_func].body,
         );
+
+        return out;
+    }
+
+    pub fn tree_shake_shader(
+        &self,
+        graph: &SymbolGraph,
+        file_name: &str,
+        shader: TypedShaderDefinition,
+    ) -> TypedIntermediate {
+        let mut out = TypedIntermediate {
+            functions: HashMap::new(),
+            structs: self.structs.clone(),
+            shaders: Vec::new(),
+        };
+
+        let func = TypedFunction {
+            name: "main".to_string(),
+            parameters: shader
+                .parameters
+                .iter()
+                .map(|p| TypedFunctionParameter {
+                    name: p.0.clone(),
+                    type_name: ExpandedType::from_string(graph, file_name, p.1),
+                    default_value: None,
+                })
+                .collect(),
+            return_type: ExpandedType::from_string(graph, file_name, "void"),
+            body: shader.body,
+            javascript: None,
+            tags: Vec::new(),
+            tagged: true,
+            tagging: false,
+        };
+
+        out.functions.insert("main".to_string(), func.clone());
+
+        let scope = Scope::new();
+
+        shake_body(graph, &scope, file_name, self, &mut out, &func.body);
 
         return out;
     }
@@ -472,7 +533,7 @@ fn check_method_local<'a>(
             format!(
                 "No operator '{}' was found that takes a right-hand side of type '{}'",
                 method_name.replace("__operator_", ""),
-                args[0].name
+                args[1].name
             ),
             Location::new(file_name.to_string(), USizeTuple(span.start, span.end)),
         ));
@@ -687,11 +748,6 @@ pub fn get_type_local(
             }
         }
         ast::Expression::InlineBlock((block, _)) => {
-            let mut shader_inst = TypedShaderInstance {
-                closure: HashMap::new(),
-                functions: HashMap::new(),
-            };
-
             let output = ExpandedType::from_string(graph, file_name, "shader");
 
             let mut new_scope = Scope::new();
@@ -708,15 +764,28 @@ pub fn get_type_local(
                 &output,
             );
 
-            build_shader_instance(
+            let mut shader_def = TypedShaderDefinition {
+                parameters: HashMap::new(),
+                functions: HashMap::new(),
+                body: typed_body.clone(),
+            };
+
+            build_shader_definition(
                 _alerts,
                 &graph,
                 &new_scope,
-                &mut shader_inst,
+                &mut shader_def,
                 file_name,
                 intermediate,
                 &typed_body,
             );
+
+            let shader_inst = TypedShaderInstance {
+                closure: shader_def.parameters.clone(),
+                shader: intermediate.shaders.len(),
+            };
+
+            intermediate.shaders.push(shader_def);
 
             (
                 "shader".to_owned(),
@@ -920,45 +989,45 @@ fn build_shader_expression(
     _alerts: &mut Vec<SpannedAlert>,
     graph: &SymbolGraph,
     scope: &Scope,
-    shader_inst: &mut TypedShaderInstance,
+    shader_def: &mut TypedShaderDefinition,
     file_name: &str,
     intermediate: &TypedIntermediate,
     typed_expression: &TypedExpression,
 ) {
     match typed_expression {
         TypedExpression::Call(func_name, args, _) => {
-            shader_inst.functions.insert(func_name.clone(), true);
+            shader_def.functions.insert(func_name.clone(), true);
 
             if let Some(func) = intermediate.functions.get(func_name) {
-                build_shader_instance(
+                build_shader_definition(
                     _alerts,
                     graph,
                     scope,
-                    shader_inst,
+                    shader_def,
                     file_name,
                     intermediate,
                     &func.body,
                 );
+            }
 
-                for arg in args {
-                    build_shader_expression(
-                        _alerts,
-                        graph,
-                        scope,
-                        shader_inst,
-                        file_name,
-                        intermediate,
-                        arg,
-                    );
-                }
+            for arg in args {
+                build_shader_expression(
+                    _alerts,
+                    graph,
+                    scope,
+                    shader_def,
+                    file_name,
+                    intermediate,
+                    arg,
+                );
             }
         }
         TypedExpression::Value(_, _) => {}
         TypedExpression::Identifier(ident, _) => {
             if let Some((scoped_var, barrier)) = scope.check_with_shader_barrier(ident, false) {
                 if barrier {
-                    shader_inst
-                        .closure
+                    shader_def
+                        .parameters
                         .insert(ident.clone(), scoped_var.clone());
                 }
             }
@@ -974,11 +1043,11 @@ fn build_shader_expression(
 }
 
 // Recursively descends into the Typed tree and adds references to the shader_inst
-fn build_shader_instance(
+fn build_shader_definition(
     _alerts: &mut Vec<SpannedAlert>,
     graph: &SymbolGraph,
     new_scope: &Scope,
-    shader_inst: &mut TypedShaderInstance,
+    shader_def: &mut TypedShaderDefinition,
     file_name: &str,
     intermediate: &TypedIntermediate,
     typed_body: &TypedBody,
@@ -1001,16 +1070,16 @@ fn build_shader_instance(
                     _alerts,
                     graph,
                     new_scope,
-                    shader_inst,
+                    shader_def,
                     file_name,
                     intermediate,
                     condition,
                 );
-                build_shader_instance(
+                build_shader_definition(
                     _alerts,
                     graph,
                     new_scope,
-                    shader_inst,
+                    shader_def,
                     file_name,
                     intermediate,
                     body,
@@ -1020,27 +1089,27 @@ fn build_shader_instance(
                         _alerts,
                         graph,
                         new_scope,
-                        shader_inst,
+                        shader_def,
                         file_name,
                         intermediate,
                         &else_if.0,
                     );
-                    build_shader_instance(
+                    build_shader_definition(
                         _alerts,
                         graph,
                         new_scope,
-                        shader_inst,
+                        shader_def,
                         file_name,
                         intermediate,
                         &else_if.1,
                     );
                 }
                 if let Some(else_body) = else_body {
-                    build_shader_instance(
+                    build_shader_definition(
                         _alerts,
                         graph,
                         new_scope,
-                        shader_inst,
+                        shader_def,
                         file_name,
                         intermediate,
                         else_body,
@@ -1056,7 +1125,7 @@ fn build_shader_instance(
                     _alerts,
                     graph,
                     new_scope,
-                    shader_inst,
+                    shader_def,
                     file_name,
                     intermediate,
                     value,
@@ -1067,7 +1136,7 @@ fn build_shader_instance(
                     _alerts,
                     graph,
                     new_scope,
-                    shader_inst,
+                    shader_def,
                     file_name,
                     intermediate,
                     expr,
@@ -1512,6 +1581,7 @@ pub fn validate<'a>(
     let mut typed = TypedIntermediate {
         functions: HashMap::new(),
         structs: Vec::new(),
+        shaders: Vec::new(),
     };
 
     if file.is_none() {
@@ -1622,6 +1692,7 @@ pub fn validate<'a>(
                                 &mut TypedIntermediate {
                                     functions: HashMap::new(),
                                     structs: vec![],
+                                    shaders: vec![],
                                 },
                                 &expr,
                             )
@@ -1673,7 +1744,11 @@ pub fn validate<'a>(
 
                 typed.structs.push((
                     symbol.get_namespaced(),
-                    _struct.fields.iter().map(|f| f.0.name.clone()).collect(),
+                    _struct
+                        .fields
+                        .iter()
+                        .map(|f| (f.0.name.clone(), f.1.name.clone()))
+                        .collect(),
                 ));
 
                 let make_name = format!("__make_struct_{}", symbol.get_namespaced());

@@ -1,4 +1,4 @@
-use crate::validator::TypedIntermediate;
+use crate::validator::{TypedExpression, TypedIntermediate, TypedStatement};
 use std::collections::HashMap;
 
 use std::str;
@@ -142,8 +142,7 @@ impl Environment {
             file.ast = ast;
             file.validation.extend(validation_errors);
         } else {
-            self.graph
-                .update_file_first_pass(name, ast.as_ref().unwrap());
+            self.graph.update_file_first_pass(name, &Vec::new());
         }
 
         file.alerts.extend(alerts);
@@ -254,6 +253,7 @@ impl Environment {
         let mut typed = TypedIntermediate {
             functions: HashMap::new(),
             structs: Vec::new(),
+            shaders: Vec::new(),
         };
 
         for (_, _type) in self.graph.primitive.iter() {
@@ -324,7 +324,10 @@ impl Environment {
 
         for file in self.files.values() {
             if let Some(ref _typed) = file.typed {
-                typed.functions.extend(_typed.functions.clone());
+                let mut funcs = _typed.functions.clone();
+                shift_shader_ids(&mut funcs, typed.shaders.len());
+                typed.functions.extend(funcs);
+                typed.shaders.extend(_typed.shaders.clone());
                 typed.structs.extend(_typed.structs.clone());
             }
         }
@@ -349,5 +352,67 @@ impl Environment {
         }
 
         return generated;
+    }
+}
+
+fn shift_shader_ids_expression(expr: &mut TypedExpression, by: usize) {
+    match expr {
+        TypedExpression::Shader(inst, _) => {
+            inst.shader += by;
+        }
+        TypedExpression::KVMap(map, _) => {
+            for (_, sub) in map.iter_mut() {
+                shift_shader_ids_expression(sub, by);
+            }
+        }
+        TypedExpression::Call(_, exprs, _) => {
+            for expr in exprs.iter_mut() {
+                shift_shader_ids_expression(expr, by);
+            }
+        }
+        _ => {}
+    };
+}
+
+fn shift_shader_ids_body(body: &mut TypedBody, by: usize) {
+    for statement in body.statements.iter_mut() {
+        match statement {
+            TypedStatement::Expression(expr, _) => {
+                shift_shader_ids_expression(expr, by);
+            }
+            TypedStatement::Return(expr, _) => {
+                shift_shader_ids_expression(expr, by);
+            }
+            TypedStatement::Let {
+                name: _,
+                value,
+                span: _,
+            } => {
+                shift_shader_ids_expression(value, by);
+            }
+            TypedStatement::If {
+                condition,
+                body: if_body,
+                else_ifs,
+                else_body,
+                span: _,
+            } => {
+                shift_shader_ids_expression(condition, by);
+                shift_shader_ids_body(if_body, by);
+                for (condition, el_body) in else_ifs {
+                    shift_shader_ids_expression(condition, by);
+                    shift_shader_ids_body(el_body, by);
+                }
+                if let Some(else_body) = else_body {
+                    shift_shader_ids_body(else_body, by);
+                }
+            }
+        };
+    }
+}
+
+fn shift_shader_ids(functions: &mut HashMap<String, TypedFunction>, by: usize) {
+    for (_, func) in functions {
+        shift_shader_ids_body(&mut func.body, by);
     }
 }
