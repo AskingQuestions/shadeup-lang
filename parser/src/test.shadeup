@@ -1,0 +1,23 @@
+
+print("Hello");
+
+struct Frame {
+    x: int
+}
+
+
+let x = 123;
+
+print(x);
+
+fn frame(info: Frame) {
+    let k = info.x + 5;
+    let x = "";
+    if (true) {
+    
+    } else {
+    
+    }
+
+    x.
+}

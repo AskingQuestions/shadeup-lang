@@ -1,4 +1,4 @@
-use crate::validator::{TypedExpression, TypedIntermediate, TypedStatement};
+use crate::validator::{IntellisenseHint, TypedExpression, TypedIntermediate, TypedStatement};
 use std::collections::HashMap;
 
 use std::str;
@@ -6,7 +6,7 @@ use std::str;
 use crate::printer::AlertLevel;
 use std::io::{BufWriter, Write};
 
-use crate::ast::{Span, USizeTuple};
+use crate::ast::{self, Span, USizeTuple};
 use crate::graph::SymbolDefinition;
 use crate::printer::SpannedAlert;
 use crate::validator::{ExpandedType, TypedBody, TypedFunction, TypedFunctionParameter};
@@ -51,9 +51,11 @@ pub struct File {
     pub name: String,
     pub source: String,
     pub ast: Option<Vec<crate::ast::Root>>,
+    pub last_working_ast: Option<Vec<crate::ast::Root>>,
     pub validation: Vec<SpannedAlert>,
     pub alerts: Vec<Alert>,
     pub typed: Option<TypedIntermediate>,
+    pub intellisense: Vec<IntellisenseHint>,
 }
 
 #[cfg_attr(feature = "wasm", wasm_bindgen)]
@@ -91,16 +93,32 @@ impl Environment {
         }
     }
 
+    pub fn get_graph(&self) -> &crate::graph::SymbolGraph {
+        &self.graph
+    }
+
+    pub fn get_intellisense(&self, name: &str) -> Vec<IntellisenseHint> {
+        self.files[name].intellisense.clone()
+    }
+
     pub fn set_file(&mut self, name: String, source: String) {
+        let mut last_working_ast = None;
+
+        if let Some(file) = self.files.get_mut(&name) {
+            last_working_ast = file.last_working_ast.clone();
+        }
+
         self.files.insert(
             name.clone(),
             File {
                 name,
                 source,
                 ast: None,
+                last_working_ast: last_working_ast,
                 validation: Vec::new(),
                 alerts: Vec::new(),
                 typed: None,
+                intellisense: Vec::new(),
             },
         );
     }
@@ -109,7 +127,7 @@ impl Environment {
         self.files.get_mut(name)
     }
 
-    pub fn parse_file(&mut self, name: &str) -> Result<(), ()> {
+    pub fn parse_file(&mut self, name: &str) -> Result<bool, ()> {
         let file = self.files.get_mut(name).unwrap();
 
         let source = file.source.as_str();
@@ -136,10 +154,13 @@ impl Environment {
             });
         }
 
+        let has_ast = ast.is_some();
+
         if ast.is_some() {
             let ast_ref = ast.as_ref().unwrap();
             let validation_errors = self.graph.update_file_first_pass(name, ast_ref);
             file.ast = ast;
+            file.last_working_ast = file.ast.clone();
             file.validation.extend(validation_errors);
         } else {
             self.graph.update_file_first_pass(name, &Vec::new());
@@ -147,7 +168,7 @@ impl Environment {
 
         file.alerts.extend(alerts);
 
-        Ok(())
+        Ok(has_ast)
     }
 
     pub fn process_file(&mut self, name: &str) -> Result<(), ()> {
@@ -160,10 +181,10 @@ impl Environment {
             file.validation
                 .extend(self.graph.update_file_second_pass(name, ast_ref));
 
-            let (_alerts, _typed) = crate::validator::validate(&self.graph, name);
-            file.validation.extend(_alerts);
-
-            typed = Some(_typed);
+            let (ctx, _typed) = crate::validator::validate(&self.graph, name);
+            file.validation.extend(ctx.alerts);
+            file.intellisense.extend(ctx.intellisense);
+            file.typed = Some(_typed);
 
             // generated = generator::generate(&self.graph, name, &typed).javascript;
         } else {
@@ -247,6 +268,26 @@ impl Environment {
         self.get_file(name).unwrap().typed = typed;
 
         return Ok(());
+    }
+
+    pub fn get_imports(&self, name: &str) -> Vec<ast::Import> {
+        let file = self.files.get(name).unwrap();
+        let mut imports = vec![];
+
+        if let Some(ast) = file.last_working_ast.as_ref() {
+            for node in ast {
+                if let ast::Root::Import(imp) = node {
+                    imports.push(imp.clone());
+                }
+            }
+        }
+
+        imports
+    }
+
+    pub fn get_ast(&self, name: &str) -> String {
+        let file = self.files.get(name).unwrap();
+        format!("{:#?}", file.ast)
     }
 
     pub fn generate_file(&mut self, name: &str) -> String {
@@ -338,11 +379,12 @@ impl Environment {
             crate::validator::tag_function(&mut typed, &k);
         }
 
-        typed = typed.tree_shake(
-            &self.graph,
-            name,
-            &format!("{}_test", name.replace(".", "__")),
-        );
+        let entry = "main".to_string();
+        let real_entry = format!("{}_{}", name.replace(".", "__"), entry);
+
+        if let Some(_func) = typed.functions.get(&real_entry) {
+            typed = typed.tree_shake(&self.graph, name, &real_entry);
+        }
 
         let mut generated = String::new();
 

@@ -200,6 +200,25 @@ impl std::fmt::Display for Value {
     }
 }
 
+macro_rules! end_with_semicolon {
+    ($main:expr) => {
+        $main
+            .then(
+                just(Token::Ctrl(';'))
+                    .map(|_| ';')
+                    .or(just(Token::Ctrl('}')).rewind().map(|_| '}'))
+                    .or(end().rewind().map(|_| 'E')),
+            )
+            .validate(|(passthrough, terminator), span, emit| {
+                if terminator != ';' {
+                    emit(Simple::custom(span, format!("Missing ;")));
+                }
+
+                passthrough
+            })
+    };
+}
+
 fn block_parser() -> impl Parser<Token, Vec<ast::Root>, Error = Simple<Token>> + Clone {
     let ident = filter_map(|span, tok| match tok {
         Token::Ident(ident) => Ok(ident.clone()),
@@ -393,8 +412,24 @@ fn block_parser() -> impl Parser<Token, Vec<ast::Root>, Error = Simple<Token>> +
                     |span| ast::Expression::Error(((), span)),
                 ));
 
+            let op = just(Token::Op(Op::Dot)).to(Op::Dot);
+            let dot = atom
+                .clone()
+                .then(
+                    op.clone()
+                        .then(atom.clone().or_not().map_with_span(|val, span| match val {
+                            Some(val) => val,
+                            None => ast::Expression::Error(((), span)),
+                        }))
+                        .repeated(),
+                )
+                .foldl(|a, (op, b)| {
+                    let span = a.get_span().start..b.get_span().end;
+                    ast::Expression::Op((Box::new(a), op, Box::new(b), span))
+                });
+
             // Function calls have very high precedence so we prioritise them
-            let call = atom
+            let call = dot
                 .then(
                     items
                         .delimited_by(just(Token::Ctrl('(')), just(Token::Ctrl(')')))
@@ -413,27 +448,18 @@ fn block_parser() -> impl Parser<Token, Vec<ast::Root>, Error = Simple<Token>> +
                     ))
                 });
 
-            let op = just(Token::Op(Op::Dot)).to(Op::Dot);
-            let dot = call
-                .clone()
-                .then(op.then(call).repeated())
-                .foldl(|a, (op, b)| {
-                    let span = a.get_span().start..b.get_span().end;
-                    ast::Expression::Op((Box::new(a), op, Box::new(b), span))
-                });
-
             // Product ops (multiply and divide) have equal precedence
             let op = just(Token::Op(Op::Mul))
                 .to(Op::Mul)
                 .or(just(Token::Op(Op::Div)).to(Op::Div))
                 .or(just(Token::Op(Op::Sq)).to(Op::Sq));
-            let product = dot
-                .clone()
-                .then(op.then(dot).repeated())
-                .foldl(|a, (op, b)| {
-                    let span = a.get_span().start..b.get_span().end;
-                    ast::Expression::Op((Box::new(a), op, Box::new(b), span))
-                });
+            let product =
+                call.clone()
+                    .then(op.then(call.clone()).repeated())
+                    .foldl(|a, (op, b)| {
+                        let span = a.get_span().start..b.get_span().end;
+                        ast::Expression::Op((Box::new(a), op, Box::new(b), span))
+                    });
 
             // Sum ops (add and subtract) have equal precedence
             let op = just(Token::Op(Op::Add))
@@ -587,11 +613,9 @@ fn block_parser() -> impl Parser<Token, Vec<ast::Root>, Error = Simple<Token>> +
             .map(|(id, ty)| (id, Some(ty)))
             .or(identifier.labelled("let identifier").map(|id| (id, None)));
 
-        let let_end = just(Token::Op(Op::Eq))
+        let let_end = end_with_semicolon!(just(Token::Op(Op::Eq))
             .then(expression.clone().labelled("let value"))
-            .then_ignore(just(Token::Ctrl(';')))
-            .map(|(_, expr)| Some(expr))
-            .or(just(Token::Ctrl(';')).to(None));
+            .map(|(_, expr)| Some(expr)));
 
         let _let = just(Token::Let)
             .ignore_then(let_start)
@@ -632,12 +656,40 @@ fn block_parser() -> impl Parser<Token, Vec<ast::Root>, Error = Simple<Token>> +
                         span: span.clone(),
                     })
                     .then(
-                        just(Token::Else).ignore_then(
-                            just(Token::If)
-                                .ignore_then(expression.clone().labelled("if condition"))
-                                .delimited_by(just(Token::Ctrl('(')), just(Token::Ctrl(')')))
-                                .then(
-                                    block_recur
+                        just(Token::Else)
+                            .ignore_then(
+                                just(Token::If)
+                                    .ignore_then(expression.clone().labelled("if condition"))
+                                    .delimited_by(just(Token::Ctrl('(')), just(Token::Ctrl(')')))
+                                    .then(
+                                        block_recur
+                                            .clone()
+                                            .delimited_by(
+                                                just(Token::Ctrl('{')),
+                                                just(Token::Ctrl('}')),
+                                            )
+                                            // Attempt to recover anything that looks like an else body but contains errors
+                                            .recover_with(nested_delimiters(
+                                                Token::Ctrl('{'),
+                                                Token::Ctrl('}'),
+                                                [
+                                                    (Token::Ctrl('('), Token::Ctrl(')')),
+                                                    (Token::Ctrl('['), Token::Ctrl(']')),
+                                                ],
+                                                |_span: Span| vec![],
+                                            )),
+                                    )
+                                    .map_with_span(|(condition, roots), span| ast::If {
+                                        condition,
+                                        body: ast::Block {
+                                            roots: roots,
+                                            span: span.clone(),
+                                        },
+                                        else_ifs: vec![],
+                                        else_body: None,
+                                        span: span.clone(),
+                                    })
+                                    .or(block_recur
                                         .clone()
                                         .delimited_by(
                                             just(Token::Ctrl('{')),
@@ -651,80 +703,59 @@ fn block_parser() -> impl Parser<Token, Vec<ast::Root>, Error = Simple<Token>> +
                                                 (Token::Ctrl('('), Token::Ctrl(')')),
                                                 (Token::Ctrl('['), Token::Ctrl(']')),
                                             ],
-                                            |_span: Span| vec![],
-                                        )),
-                                )
-                                .map_with_span(|(condition, roots), span| ast::If {
-                                    condition,
-                                    body: ast::Block {
-                                        roots: roots,
-                                        span: span.clone(),
-                                    },
-                                    else_ifs: vec![],
-                                    else_body: None,
-                                    span: span.clone(),
-                                })
-                                .or(block_recur
-                                    .clone()
-                                    .delimited_by(just(Token::Ctrl('{')), just(Token::Ctrl('}')))
-                                    // Attempt to recover anything that looks like an else body but contains errors
-                                    .recover_with(nested_delimiters(
-                                        Token::Ctrl('{'),
-                                        Token::Ctrl('}'),
-                                        [
-                                            (Token::Ctrl('('), Token::Ctrl(')')),
-                                            (Token::Ctrl('['), Token::Ctrl(']')),
-                                        ],
-                                        |span: Span| {
-                                            vec![ast::Root::If(ast::If {
-                                                condition: ast::Expression::Value((
-                                                    ast::Value::Bool(true),
-                                                    span.clone(),
-                                                )),
-                                                body: ast::Block {
-                                                    roots: vec![],
+                                            |span: Span| {
+                                                vec![ast::Root::If(ast::If {
+                                                    condition: ast::Expression::Value((
+                                                        ast::Value::Bool(true),
+                                                        span.clone(),
+                                                    )),
+                                                    body: ast::Block {
+                                                        roots: vec![],
+                                                        span: span.clone(),
+                                                    },
+                                                    else_ifs: vec![],
+                                                    else_body: None,
                                                     span: span.clone(),
-                                                },
-                                                else_ifs: vec![],
-                                                else_body: None,
-                                                span: span.clone(),
-                                            })]
-                                        },
-                                    ))
-                                    .map_with_span(|roots, span| ast::Block {
-                                        roots: roots,
-                                        span: span.clone(),
-                                    })
-                                    .map_with_span(|block, span| ast::If {
-                                        condition: ast::Expression::Error(((), 0..0)),
-                                        body: ast::Block {
-                                            roots: vec![],
+                                                })]
+                                            },
+                                        ))
+                                        .map_with_span(|roots, span| ast::Block {
+                                            roots: roots,
                                             span: span.clone(),
-                                        },
-                                        else_ifs: vec![],
-                                        else_body: Some(block),
-                                        span: span.clone(),
-                                    }))
-                                .repeated(),
-                        ),
+                                        })
+                                        .map_with_span(|block, span| ast::If {
+                                            condition: ast::Expression::Error(((), 0..0)),
+                                            body: ast::Block {
+                                                roots: vec![],
+                                                span: span.clone(),
+                                            },
+                                            else_ifs: vec![],
+                                            else_body: Some(block),
+                                            span: span.clone(),
+                                        }))
+                                    .repeated(),
+                            )
+                            .or_not(),
                     ),
             )
             .map_with_span(|(cond, (block, ifs)), span| {
                 let mut else_body: Option<ast::Block> = None;
                 let mut else_ifs = vec![];
-                for if_ in ifs.into_iter().rev() {
-                    if let ast::Expression::Error((_, orig_span)) = if_.condition {
-                        if orig_span.start == 0 && orig_span.end == 0 {
-                            else_body = Some(if_.else_body.unwrap().clone());
+                if let Some(ifs) = ifs {
+                    for if_ in ifs.into_iter().rev() {
+                        if let ast::Expression::Error((_, orig_span)) = if_.condition {
+                            if orig_span.start == 0 && orig_span.end == 0 {
+                                else_body = Some(if_.else_body.unwrap().clone());
+                            }
+                        } else {
+                            else_ifs.push(ast::If {
+                                condition: if_.condition,
+                                body: if_.body,
+                                else_ifs: vec![],
+                                else_body: None,
+                                span: if_.span.clone(),
+                            });
                         }
-                    } else {
-                        else_ifs.push(ast::If {
-                            condition: if_.condition,
-                            body: if_.body,
-                            else_ifs: vec![],
-                            else_body: None,
-                            span: if_.span.clone(),
-                        });
                     }
                 }
                 ast::Root::If(ast::If {
@@ -805,10 +836,8 @@ fn block_parser() -> impl Parser<Token, Vec<ast::Root>, Error = Simple<Token>> +
         //         })
         //     });
 
-        let expression_statement = expression
-            .clone()
-            .then_ignore(just(Token::Ctrl(';')))
-            .map(|expr| ast::Root::Expression(expr));
+        let expression_statement =
+            end_with_semicolon!(expression.clone().map(|expr| ast::Root::Expression(expr)));
 
         shader_or_main_block
             .or(_let)

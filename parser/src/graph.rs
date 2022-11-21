@@ -15,6 +15,7 @@ pub struct SymbolFunction {
     pub return_type: Option<SymbolRef>,
     pub javascript: Option<String>,
     pub tags: Vec<TypedTag>,
+    pub span: Span,
 }
 
 #[derive(Clone)]
@@ -49,6 +50,7 @@ impl SymbolDefinition {
 #[derive(Clone)]
 pub struct SymbolNode {
     pub imported: bool,
+    pub aliased: bool,
     pub name: String,
     pub real_name: String,
     pub definition: SymbolDefinition,
@@ -87,12 +89,31 @@ impl SymbolGraph {
         sg
     }
 
+    pub fn get_symbol_node_in_file(
+        &self,
+        file_name: &str,
+        symbol_name: &str,
+    ) -> Option<&SymbolNode> {
+        if let Some(node) = self
+            .files
+            .get(file_name)
+            .and_then(|file| file.get(symbol_name))
+        {
+            Some(node)
+        } else if let Some(node) = self.primitive.get(symbol_name) {
+            Some(node)
+        } else {
+            None
+        }
+    }
+
     pub fn add_primitive_symbols(&mut self) {
         macro_rules! add_primitive {
             ($name:expr, $methods:expr) => {
                 self.primitive.insert(
                     $name.to_owned(),
                     SymbolNode {
+                        aliased: false,
                         imported: false,
                         name: $name.to_string(),
                         real_name: $name.to_string(),
@@ -111,10 +132,12 @@ impl SymbolGraph {
         self.primitive.insert(
             "print".to_owned(),
             SymbolNode {
+                aliased: false,
                 imported: false,
                 name: "print".to_string(),
                 real_name: "print".to_string(),
                 definition: SymbolDefinition::Function(SymbolFunction {
+                    span: 0..0,
                     parameters: vec![("value".to_string(), "string".to_string(), false)],
                     return_type: None,
                     javascript: Some("console.log(value)".to_string()),
@@ -138,6 +161,7 @@ impl SymbolGraph {
                         (
                             "__operator_plus".to_string(),
                             SymbolFunction {
+                                span: 0..0,
                                 parameters: vec![
                                     ("__this".to_owned(), type_name.clone(), false),
                                     ("other".to_owned(), type_name.clone(), false),
@@ -150,6 +174,7 @@ impl SymbolGraph {
                         (
                             "__operator_minus".to_string(),
                             SymbolFunction {
+                                span: 0..0,
                                 parameters: vec![
                                     ("__this".to_owned(), type_name.clone(), false),
                                     ("other".to_owned(), type_name.clone(), false),
@@ -162,6 +187,7 @@ impl SymbolGraph {
                         (
                             "__operator_divide".to_string(),
                             SymbolFunction {
+                                span: 0..0,
                                 parameters: vec![
                                     ("__this".to_owned(), type_name.clone(), false),
                                     ("other".to_owned(), type_name.clone(), false),
@@ -174,6 +200,7 @@ impl SymbolGraph {
                         (
                             "__operator_multiply".to_string(),
                             SymbolFunction {
+                                span: 0..0,
                                 parameters: vec![
                                     ("__this".to_owned(), type_name.clone(), false),
                                     ("other".to_owned(), type_name.clone(), false),
@@ -186,6 +213,7 @@ impl SymbolGraph {
                         (
                             "__operator_modulo".to_string(),
                             SymbolFunction {
+                                span: 0..0,
                                 parameters: vec![
                                     ("__this".to_owned(), type_name.clone(), false),
                                     ("other".to_owned(), type_name.clone(), false),
@@ -198,6 +226,7 @@ impl SymbolGraph {
                         (
                             "__operator_equals".to_string(),
                             SymbolFunction {
+                                span: 0..0,
                                 parameters: vec![
                                     ("__this".to_owned(), type_name.clone(), false),
                                     ("other".to_owned(), type_name.clone(), false),
@@ -210,6 +239,7 @@ impl SymbolGraph {
                         (
                             "__operator_not_equals".to_string(),
                             SymbolFunction {
+                                span: 0..0,
                                 parameters: vec![
                                     ("__this".to_owned(), type_name.clone(), false),
                                     ("other".to_owned(), type_name.clone(), false),
@@ -222,6 +252,7 @@ impl SymbolGraph {
                         (
                             "__operator_less_than".to_string(),
                             SymbolFunction {
+                                span: 0..0,
                                 parameters: vec![
                                     ("__this".to_owned(), type_name.clone(), false),
                                     ("other".to_owned(), type_name.clone(), false),
@@ -234,6 +265,7 @@ impl SymbolGraph {
                         (
                             "__operator_greater_than".to_string(),
                             SymbolFunction {
+                                span: 0..0,
                                 parameters: vec![
                                     ("__this".to_owned(), type_name.clone(), false),
                                     ("other".to_owned(), type_name.clone(), false),
@@ -246,6 +278,7 @@ impl SymbolGraph {
                         (
                             "__operator_less_than_or_equals".to_string(),
                             SymbolFunction {
+                                span: 0..0,
                                 parameters: vec![
                                     ("__this".to_owned(), type_name.clone(), false),
                                     ("other".to_owned(), type_name.clone(), false),
@@ -258,6 +291,7 @@ impl SymbolGraph {
                         (
                             "__operator_greater_than_or_equals".to_string(),
                             SymbolFunction {
+                                span: 0..0,
                                 parameters: vec![
                                     ("__this".to_owned(), type_name.clone(), false),
                                     ("other".to_owned(), type_name.clone(), false),
@@ -270,6 +304,7 @@ impl SymbolGraph {
                         (
                             "__is_scalar".to_string(),
                             SymbolFunction {
+                                span: 0..0,
                                 parameters: vec![
                                     ("__this".to_owned(), type_name.clone(), false),
                                     ("other".to_owned(), type_name.clone(), false),
@@ -282,6 +317,7 @@ impl SymbolGraph {
                         (
                             "__cast_from_scalar".to_string(),
                             SymbolFunction {
+                                span: 0..0,
                                 parameters: vec![("other".to_owned(), type_name.clone(), false)],
                                 return_type: Some(type_name.clone()),
                                 javascript: Some(format!("return other{};", $mask)),
@@ -307,6 +343,7 @@ impl SymbolGraph {
                         (
                             "__operator_cross".to_string(),
                             SymbolFunction {
+                                span: 0..0,
                                 parameters: vec![
                                     ("__this".to_owned(), type_name.clone(), false),
                                     ("other".to_owned(), type_name.clone(), false),
@@ -319,6 +356,7 @@ impl SymbolGraph {
                         (
                             "__operator_plus".to_string(),
                             SymbolFunction {
+                                span: 0..0,
                                 parameters: vec![
                                     ("__this".to_owned(), type_name.clone(), false),
                                     ("other".to_owned(), type_name.clone(), false),
@@ -331,6 +369,7 @@ impl SymbolGraph {
                         (
                             "__operator_minus".to_string(),
                             SymbolFunction {
+                                span: 0..0,
                                 parameters: vec![
                                     ("__this".to_owned(), type_name.clone(), false),
                                     ("other".to_owned(), type_name.clone(), false),
@@ -343,6 +382,7 @@ impl SymbolGraph {
                         (
                             "__operator_divide".to_string(),
                             SymbolFunction {
+                                span: 0..0,
                                 parameters: vec![
                                     ("__this".to_owned(), type_name.clone(), false),
                                     ("other".to_owned(), type_name.clone(), false),
@@ -355,6 +395,7 @@ impl SymbolGraph {
                         (
                             "__operator_multiply".to_string(),
                             SymbolFunction {
+                                span: 0..0,
                                 parameters: vec![
                                     ("__this".to_owned(), type_name.clone(), false),
                                     ("other".to_owned(), type_name.clone(), false),
@@ -367,6 +408,7 @@ impl SymbolGraph {
                         (
                             "__operator_modulo".to_string(),
                             SymbolFunction {
+                                span: 0..0,
                                 parameters: vec![
                                     ("__this".to_owned(), type_name.clone(), false),
                                     ("other".to_owned(), type_name.clone(), false),
@@ -379,6 +421,7 @@ impl SymbolGraph {
                         (
                             format!("__is_vec_{}", num_fields),
                             SymbolFunction {
+                                span: 0..0,
                                 parameters: vec![
                                     ("__this".to_owned(), type_name.clone(), false),
                                     ("other".to_owned(), type_name.clone(), false),
@@ -391,6 +434,7 @@ impl SymbolGraph {
                         (
                             "__cast_from_vec".to_string(),
                             SymbolFunction {
+                                span: 0..0,
                                 parameters: vec![("other".to_owned(), type_name.clone(), false)],
                                 return_type: Some(type_name.clone()),
                                 javascript: Some(format!(
@@ -516,6 +560,7 @@ impl SymbolGraph {
                         hmap.insert(
                             name,
                             SymbolNode {
+                                aliased: false,
                                 imported: false,
                                 file: file_name.to_owned(),
                                 root: ast::Root::Struct(struct_.clone()),
@@ -548,10 +593,12 @@ impl SymbolGraph {
                         hmap.insert(
                             name,
                             SymbolNode {
+                                aliased: false,
                                 imported: false,
                                 file: file_name.to_owned(),
                                 root: ast::Root::Function(function.clone()),
                                 definition: SymbolDefinition::Function(SymbolFunction {
+                                    span: function.name.span.clone(),
                                     javascript: None,
                                     tags: Vec::new(),
                                     parameters: function
@@ -627,9 +674,9 @@ impl SymbolGraph {
                     } else {
                         let file = self.files.get(path.as_str()).unwrap();
 
-                        for symbol in names {
-                            let name = symbol.name.name.clone();
-                            let alias = match symbol.alias {
+                        for import_symbol in names {
+                            let name = import_symbol.name.name.clone();
+                            let alias = match import_symbol.alias {
                                 Some(ref alias) => alias.name.clone(),
                                 None => name.clone(),
                             };
@@ -640,7 +687,10 @@ impl SymbolGraph {
                                     format!("Illegal alias to hide primitive {}", name),
                                     Location::new(
                                         file_name.to_owned(),
-                                        USizeTuple(symbol.span.start, symbol.span.end),
+                                        USizeTuple(
+                                            import_symbol.span.start,
+                                            import_symbol.span.end,
+                                        ),
                                     ),
                                 );
 
@@ -651,7 +701,7 @@ impl SymbolGraph {
                                     format!("Symbol '{}' not found in '{}'. Is it marked as public? (e.g. pub fn MyFunc())", name, path),
                                     Location::new(
                                         file_name.to_owned(),
-                                        USizeTuple(symbol.span.start, symbol.span.end),
+                                        USizeTuple(import_symbol.span.start, import_symbol.span.end),
                                     ),
                                 );
 
@@ -676,7 +726,7 @@ impl SymbolGraph {
                                         format!("Symbol '{}' is already defined in this file, consider using an alias. ( e.g. import {} as _{} from '{}'; )", alias, name, alias, path),
                                         Location::new(
                                             file_name.to_owned(),
-                                            USizeTuple(symbol.span.start, symbol.span.end),
+                                            USizeTuple(import_symbol.span.start, import_symbol.span.end),
                                         ),
                                         format!("defined in this file here"),
                                         Location::new(
@@ -691,6 +741,10 @@ impl SymbolGraph {
                                     let mut symbol_clone = symbol.clone();
                                     symbol_clone.name = alias.clone();
                                     symbol_clone.imported = true;
+                                    symbol_clone.span = import_symbol.span.clone();
+                                    if alias != symbol.name {
+                                        symbol_clone.aliased = true;
+                                    }
                                     hmap.insert(alias.clone(), symbol_clone);
                                 }
                             }
@@ -728,6 +782,7 @@ impl SymbolGraph {
                                         (
                                             function.name.name.clone(),
                                             SymbolFunction {
+                                                span: function.name.span.clone(),
                                                 javascript: None,
                                                 tags: Vec::new(),
                                                 parameters: function

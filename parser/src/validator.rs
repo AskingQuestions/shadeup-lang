@@ -1,13 +1,48 @@
+use serde::{Deserialize, Serialize};
+
 use std::collections::HashMap;
 
 use crate::ast::{self, Expression, Location, Op, Span, USizeTuple};
-use crate::graph::{SymbolDefinition, SymbolGraph, SymbolType};
+use crate::graph::{SymbolDefinition, SymbolFunction, SymbolGraph, SymbolNode, SymbolType};
 use crate::printer::SpannedAlert;
 
 pub struct Scope<'a> {
     shader_barrier: bool,
     definitions: HashMap<String, String>,
     parent: Option<Box<&'a Scope<'a>>>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub enum IntellisenseItemKind {
+    Function,
+    Field,
+    Variable,
+    Type,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct IntellisenseSuggestion {
+    pub value: String,
+    pub label: String,
+    pub kind: IntellisenseItemKind,
+    pub detail: String,
+    pub documentation: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct IntellisenseHint {
+    pub start: usize,
+    pub end: usize,
+    pub label: String,
+    pub kind: IntellisenseItemKind,
+    pub goto_offset: usize,
+    pub detail: String,
+    pub suggestions: Vec<IntellisenseSuggestion>,
+}
+
+pub struct ValidationContext {
+    pub alerts: Vec<SpannedAlert>,
+    pub intellisense: Vec<IntellisenseHint>,
 }
 
 #[allow(dead_code)]
@@ -396,7 +431,7 @@ impl<'a> Scope<'a> {
 }
 
 fn check_type_local<'a>(
-    _alerts: &mut Vec<SpannedAlert>,
+    _context: &mut ValidationContext,
     graph: &'a SymbolGraph,
     file_name: &str,
     name: &ast::Identifier,
@@ -418,7 +453,7 @@ fn check_type_local<'a>(
     let symbol = file.get(&name.name);
 
     if symbol.is_none() {
-        _alerts.push(SpannedAlert::error(
+        _context.alerts.push(SpannedAlert::error(
             "Undefined symbol".to_string(),
             format!(
                 "The symbol '{}' was not found in this file. Did you forget to import it?",
@@ -439,7 +474,7 @@ fn check_type_local<'a>(
         if let SymbolDefinition::Type(def_type) = &symbol.definition {
             return Some(def_type);
         } else {
-            _alerts.push(SpannedAlert::error(
+            _context.alerts.push(SpannedAlert::error(
                 "Expected a type".to_string(),
                 format!(
                     "The symbol '{}' is not a type but a {}",
@@ -460,7 +495,7 @@ fn check_type_local<'a>(
 }
 
 fn check_method_local<'a>(
-    _alerts: &mut Vec<SpannedAlert>,
+    _context: &mut ValidationContext,
     graph: &'a SymbolGraph,
     file_name: &str,
     span: &Span,
@@ -474,7 +509,7 @@ fn check_method_local<'a>(
             let mut compatible = true;
             if args.len() > method.1.parameters.len() {
                 compatible = false;
-                _alerts.push(SpannedAlert::error(
+                _context.alerts.push(SpannedAlert::error(
                     "Too many arguments".to_string(),
                     format!(
                         "Expected {} arguments but got {}",
@@ -491,7 +526,7 @@ fn check_method_local<'a>(
                         continue;
                     } else {
                         compatible = false;
-                        _alerts.push(SpannedAlert::error(
+                        _context.alerts.push(SpannedAlert::error(
                             "Missing parameter".to_string(),
                             format!("Parameter '{}' is required but was not provided", param.0),
                             Location::new(file_name.to_string(), USizeTuple(span.start, span.end)),
@@ -508,7 +543,7 @@ fn check_method_local<'a>(
                     param.1.as_str(),
                 )) {
                     compatible = false;
-                    _alerts.push(SpannedAlert::error(
+                    _context.alerts.push(SpannedAlert::error(
                         "Invalid argument type".to_string(),
                         format!("Expected type '{}' but got '{}'", param.1, arg.to_string()),
                         Location::new(file_name.to_string(), USizeTuple(span.start, span.end)),
@@ -528,7 +563,7 @@ fn check_method_local<'a>(
     }
 
     if method_name.starts_with("__operator_") {
-        _alerts.push(SpannedAlert::error(
+        _context.alerts.push(SpannedAlert::error(
             "Undefined operator".to_string(),
             format!(
                 "No operator '{}' was found that takes a right-hand side of type '{}'",
@@ -538,7 +573,7 @@ fn check_method_local<'a>(
             Location::new(file_name.to_string(), USizeTuple(span.start, span.end)),
         ));
     } else {
-        _alerts.push(SpannedAlert::error(
+        _context.alerts.push(SpannedAlert::error(
             "Undefined method".to_string(),
             format!("The method '{}' was not found", method_name),
             Location::new(file_name.to_string(), USizeTuple(span.start, span.end)),
@@ -548,8 +583,61 @@ fn check_method_local<'a>(
     return "!error".to_string();
 }
 
+pub fn get_hint_for_function(name: &str, func: &SymbolFunction) -> IntellisenseSuggestion {
+    IntellisenseSuggestion {
+        value: format!(
+            "{}({})",
+            name,
+            func.parameters
+                .iter()
+                .enumerate()
+                .map(|(i, x)| format!("${{{}:{}}}", i + 1, x.0))
+                .collect::<Vec<String>>()
+                .join(", ")
+        ),
+        label: name.to_string(),
+        kind: IntellisenseItemKind::Function,
+        detail: format!(
+            "({}) -> {}",
+            func.parameters
+                .iter()
+                .map(|x| format!("{}: {}", x.0, x.1))
+                .collect::<Vec<String>>()
+                .join(", "),
+            func.return_type.clone().unwrap_or("void".to_owned())
+        ),
+        documentation: None,
+    }
+}
+
+pub fn add_struct_hints(ctx: &mut ValidationContext, symbol: &SymbolType, span: &Span) {
+    let mut suggestions = Vec::new();
+    for prop in &symbol.fields {
+        suggestions.push(IntellisenseSuggestion {
+            value: prop.0.clone(),
+            label: prop.0.clone(),
+            kind: IntellisenseItemKind::Field,
+            detail: prop.1.clone(),
+            documentation: None,
+        });
+    }
+
+    for func in &symbol.methods {
+        suggestions.push(get_hint_for_function(&func.0, &func.1));
+    }
+    ctx.intellisense.push(IntellisenseHint {
+        start: span.end,
+        end: span.end,
+        goto_offset: span.end,
+        label: "dot".to_string(),
+        kind: IntellisenseItemKind::Type,
+        detail: ">".to_string(),
+        suggestions: suggestions,
+    });
+}
+
 pub fn get_type_local(
-    _alerts: &mut Vec<SpannedAlert>,
+    _context: &mut ValidationContext,
     scope: &Scope,
     graph: &SymbolGraph,
     file_name: &str,
@@ -582,6 +670,8 @@ pub fn get_type_local(
         ast::Expression::Error(_) => ("!error".to_string(), TypedExpression::Error()),
         ast::Expression::Identifier((ident, _)) => {
             if let Some(local_type) = scope.check(&ident.name) {
+                add_variable_hint(_context, &ident.name, &local_type, &ident.span);
+
                 (
                     local_type,
                     TypedExpression::Identifier(ident.name.clone(), ident.span.clone()),
@@ -594,37 +684,43 @@ pub fn get_type_local(
                 }
                 if let Some(symbol) = symbol {
                     match &symbol.definition {
-                        SymbolDefinition::Type(_) => (
-                            ident.name.clone(),
-                            TypedExpression::Identifier(
-                                symbol.get_namespaced(),
-                                ident.span.clone(),
-                            ),
-                        ),
+                        SymbolDefinition::Type(_) => {
+                            add_type_hint(_context, symbol, &ident.span);
+                            (
+                                ident.name.clone(),
+                                TypedExpression::Identifier(
+                                    symbol.get_namespaced(),
+                                    ident.span.clone(),
+                                ),
+                            )
+                        }
 
-                        SymbolDefinition::Function(func) => (
-                            format!(
-                                "function<{}{}>",
-                                func.return_type.clone().unwrap_or("void".to_owned()),
-                                func.parameters
-                                    .iter()
-                                    .map(|x| if x.2 {
-                                        format!(",__optional<{}>", x.1.clone())
-                                    } else {
-                                        format!(",{}", x.1.clone())
-                                    })
-                                    .collect::<Vec<String>>()
-                                    .join("")
-                            ),
-                            TypedExpression::Identifier(
-                                format!("{}", symbol.get_namespaced()),
-                                ident.span.clone(),
-                            ),
-                        ),
+                        SymbolDefinition::Function(func) => {
+                            add_function_hint(_context, symbol, &ident.span);
+                            (
+                                format!(
+                                    "function<{}{}>",
+                                    func.return_type.clone().unwrap_or("void".to_owned()),
+                                    func.parameters
+                                        .iter()
+                                        .map(|x| if x.2 {
+                                            format!(",__optional<{}>", x.1.clone())
+                                        } else {
+                                            format!(",{}", x.1.clone())
+                                        })
+                                        .collect::<Vec<String>>()
+                                        .join("")
+                                ),
+                                TypedExpression::Identifier(
+                                    format!("{}", symbol.get_namespaced()),
+                                    ident.span.clone(),
+                                ),
+                            )
+                        }
                         _ => ("!error".to_string(), TypedExpression::Error()),
                     }
                 } else {
-                    _alerts.push(SpannedAlert::error(
+                    _context.alerts.push(SpannedAlert::error(
                         "Undefined identifier".to_string(),
                         format!("'{}' was not found in this scope", ident.name),
                         Location::new(
@@ -638,7 +734,7 @@ pub fn get_type_local(
         }
         ast::Expression::Call((call, _)) => {
             let (func_type, typed_expr) = get_type_local(
-                _alerts,
+                _context,
                 scope,
                 graph,
                 file_name,
@@ -656,7 +752,7 @@ pub fn get_type_local(
                 }
 
                 if call.args.len() > func_type.generics.len() - 1 {
-                    _alerts.push(SpannedAlert::error(
+                    _context.alerts.push(SpannedAlert::error(
                         "Too many arguments".to_string(),
                         format!(
                             "Expected {} arguments but got {}",
@@ -675,7 +771,7 @@ pub fn get_type_local(
                         if param.name == "__optional" {
                             continue;
                         } else {
-                            _alerts.push(SpannedAlert::error(
+                            _context.alerts.push(SpannedAlert::error(
                                 "Too few arguments".to_string(),
                                 format!(
                                     "Expected {} arguments but got {}",
@@ -692,7 +788,7 @@ pub fn get_type_local(
                     }
 
                     let (arg_type_string, typed_arg) = get_type_local(
-                        _alerts,
+                        _context,
                         scope,
                         graph,
                         file_name,
@@ -711,16 +807,19 @@ pub fn get_type_local(
                     typed_args.push(arg_type.wrap_cast(real_param_type, typed_arg));
 
                     if !arg_type.is_compatible_with(real_param_type) {
-                        _alerts.push(SpannedAlert::error(
-                            "Type mismatch".to_string(),
+                        _context.alerts.push(SpannedAlert::error(
+                            "Argument type mismatch".to_string(),
                             format!(
                                 "Expected type '{}' but got type '{}'",
                                 real_param_type.to_string(),
-                                arg_type.to_string()
+                                arg_type.to_string(),
                             ),
                             Location::new(
                                 file_name.to_string(),
-                                USizeTuple(call.span.start, call.span.end),
+                                USizeTuple(
+                                    call.args[i].get_span().start,
+                                    call.args[i].get_span().end,
+                                ),
                             ),
                         ));
                     }
@@ -736,7 +835,7 @@ pub fn get_type_local(
                     TypedExpression::Call(func_name, typed_args, call.span.clone()),
                 )
             } else {
-                _alerts.push(SpannedAlert::error(
+                _context.alerts.push(SpannedAlert::error(
                     "Expected something callable".to_string(),
                     format!("got: '{}'", func_type.name),
                     Location::new(
@@ -755,7 +854,7 @@ pub fn get_type_local(
             new_scope.shader_barrier = true;
 
             let typed_body = check_body_local(
-                _alerts,
+                _context,
                 &mut new_scope,
                 &graph,
                 file_name,
@@ -771,7 +870,7 @@ pub fn get_type_local(
             };
 
             build_shader_definition(
-                _alerts,
+                _context,
                 &graph,
                 &new_scope,
                 &mut shader_def,
@@ -793,7 +892,7 @@ pub fn get_type_local(
             )
         }
         ast::Expression::StructInstance((ident, args, _)) => {
-            let checked_type = check_type_local(_alerts, graph, file_name, ident);
+            let checked_type = check_type_local(_context, graph, file_name, ident);
             if checked_type.is_some() {
                 let symbol = graph
                     .files
@@ -809,7 +908,7 @@ pub fn get_type_local(
                             args.iter()
                                 .map(|arg| {
                                     let (expr_type, arg_typed) = get_type_local(
-                                        _alerts,
+                                        _context,
                                         scope,
                                         graph,
                                         file_name,
@@ -842,15 +941,12 @@ pub fn get_type_local(
         }
         ast::Expression::Op((lhs, op, rhs, span)) => {
             let (lhs_type, lhs_typed_expr) =
-                get_type_local(_alerts, scope, graph, file_name, intermediate, lhs);
-            let (rhs_type, rhs_typed_expr) =
-                get_type_local(_alerts, scope, graph, file_name, intermediate, rhs);
+                get_type_local(_context, scope, graph, file_name, intermediate, lhs);
 
             let lhs_type = ExpandedType::from_string(graph, file_name, &lhs_type);
-            let rhs_type = ExpandedType::from_string(graph, file_name, &rhs_type);
 
             let lhs_symbol = check_type_local(
-                _alerts,
+                _context,
                 graph,
                 file_name,
                 &ast::Identifier {
@@ -861,75 +957,116 @@ pub fn get_type_local(
 
             if let Op::Dot = op {
                 if let Some(lhs_symbol) = lhs_symbol {
-                    let lhs_symbol_node = graph
-                        .files
-                        .get(file_name)
-                        .unwrap()
-                        .get(&lhs_type.name)
-                        .unwrap();
-                    if let ast::Expression::Identifier(rhs_ident) = rhs.as_ref() {
-                        let field = lhs_symbol.fields.iter().find(|x| x.0 == rhs_ident.0.name);
-                        let method = lhs_symbol.methods.iter().find(|x| x.0 == rhs_ident.0.name);
-                        if let Some(field) = field {
-                            return (
-                                field.1.clone(),
-                                TypedExpression::Call(
-                                    format!(
-                                        "__get_struct_{}_{}",
-                                        lhs_symbol_node.get_namespaced(),
-                                        field.0
+                    if let Some(lhs_symbol_node) =
+                        graph.get_symbol_node_in_file(file_name, &lhs_type.name)
+                    {
+                        if let ast::Expression::Identifier(rhs_ident) = rhs.as_ref() {
+                            let field = lhs_symbol.fields.iter().find(|x| x.0 == rhs_ident.0.name);
+                            let method =
+                                lhs_symbol.methods.iter().find(|x| x.0 == rhs_ident.0.name);
+                            if let Some(field) = field {
+                                add_type_field_hint(
+                                    _context,
+                                    lhs_symbol_node,
+                                    &field.0,
+                                    &field.1,
+                                    span,
+                                );
+                                return (
+                                    field.1.clone(),
+                                    TypedExpression::Call(
+                                        format!(
+                                            "__get_struct_{}_{}",
+                                            lhs_symbol_node.get_namespaced(),
+                                            field.0
+                                        ),
+                                        vec![lhs_typed_expr],
+                                        span.clone(),
                                     ),
-                                    vec![lhs_typed_expr],
-                                    span.clone(),
-                                ),
-                            );
-                        } else if let Some(ref method) = method {
-                            return (
-                                format!(
-                                    "function<{},{}>",
-                                    method.1.return_type.clone().unwrap_or("void".to_owned()),
-                                    method
-                                        .1
-                                        .parameters
-                                        .iter()
-                                        .map(|x| if x.2 {
-                                            format!("__optional<{}>", x.1.clone())
-                                        } else {
-                                            x.1.clone()
-                                        })
-                                        .collect::<Vec<String>>()
-                                        .join(",")
-                                ),
-                                TypedExpression::Identifier(
-                                    format!("__{}_{}", lhs_symbol_node.get_namespaced(), method.0),
-                                    span.clone(),
-                                ),
-                            );
+                                );
+                            } else if let Some(ref method) = method {
+                                add_type_method_hint(
+                                    _context,
+                                    lhs_symbol_node,
+                                    &method.0,
+                                    &method.1,
+                                    span,
+                                );
+                                return (
+                                    format!(
+                                        "function<{},{}>",
+                                        method.1.return_type.clone().unwrap_or("void".to_owned()),
+                                        method
+                                            .1
+                                            .parameters
+                                            .iter()
+                                            .map(|x| if x.2 {
+                                                format!("__optional<{}>", x.1.clone())
+                                            } else {
+                                                x.1.clone()
+                                            })
+                                            .collect::<Vec<String>>()
+                                            .join(",")
+                                    ),
+                                    TypedExpression::Identifier(
+                                        format!(
+                                            "__{}_{}",
+                                            lhs_symbol_node.get_namespaced(),
+                                            method.0
+                                        ),
+                                        span.clone(),
+                                    ),
+                                );
+                            } else {
+                                _context.alerts.push(SpannedAlert::error(
+                                    "Field not found".to_string(),
+                                    format!(
+                                        "'{}' does not have a member named '{}'",
+                                        lhs_type.name.clone(),
+                                        rhs_ident.0.name.clone()
+                                    ),
+                                    Location::new(
+                                        file_name.to_string(),
+                                        USizeTuple(span.start, span.end),
+                                    ),
+                                ));
+                                return ("!error".to_string(), TypedExpression::Error());
+                            }
                         } else {
-                            _alerts.push(SpannedAlert::error(
-                                "Field not found".to_string(),
-                                format!(
-                                    "'{}' does not have a member named '{}'",
-                                    lhs_type.name.clone(),
-                                    rhs_ident.0.name.clone()
-                                ),
+                            let (rhs_type, _rhs_typed_expr) = get_type_local(
+                                _context,
+                                scope,
+                                graph,
+                                file_name,
+                                intermediate,
+                                rhs,
+                            );
+                            let rhs_type = ExpandedType::from_string(graph, file_name, &rhs_type);
+                            _context.alerts.push(SpannedAlert::error(
+                                "Expected identifier".to_string(),
+                                format!("got: '{}'", rhs_type.name),
                                 Location::new(
                                     file_name.to_string(),
                                     USizeTuple(span.start, span.end),
                                 ),
                             ));
+
+                            add_struct_hints(_context, lhs_symbol, &rhs.get_span());
                             return ("!error".to_string(), TypedExpression::Error());
                         }
                     } else {
-                        _alerts.push(SpannedAlert::error(
-                            "Expected identifier".to_string(),
-                            format!("got: '{}'", rhs_type.name),
+                        _context.alerts.push(SpannedAlert::error(
+                            "Expected identifier after the dot".to_string(),
+                            format!("got: nothing"),
                             Location::new(file_name.to_string(), USizeTuple(span.start, span.end)),
                         ));
+
+                        add_struct_hints(_context, lhs_symbol, span);
+
                         return ("!error".to_string(), TypedExpression::Error());
                     }
                 } else {
-                    _alerts.push(SpannedAlert::error(
+                    _context.alerts.push(SpannedAlert::error(
                         "Expected struct".to_string(),
                         format!("got: '{}'", lhs_type.name),
                         Location::new(file_name.to_string(), USizeTuple(span.start, span.end)),
@@ -937,10 +1074,13 @@ pub fn get_type_local(
                     return ("!error".to_string(), TypedExpression::Error());
                 }
             } else {
+                let (rhs_type, rhs_typed_expr) =
+                    get_type_local(_context, scope, graph, file_name, intermediate, rhs);
+                let rhs_type = ExpandedType::from_string(graph, file_name, &rhs_type);
                 if let Some(lhs_symbol) = lhs_symbol {
                     let mut params = vec![lhs_type, rhs_type];
                     let method_op = check_method_local(
-                        _alerts,
+                        _context,
                         graph,
                         file_name,
                         span,
@@ -972,7 +1112,7 @@ pub fn get_type_local(
                         ),
                     )
                 } else {
-                    _alerts.push(SpannedAlert::error(
+                    _context.alerts.push(SpannedAlert::error(
                         "Undefined left-hand side".to_string(),
                         format!("The expression is undefined"),
                         Location::new(file_name.to_string(), USizeTuple(span.start, span.end)),
@@ -985,8 +1125,20 @@ pub fn get_type_local(
     }
 }
 
+fn add_variable_hint(ctx: &mut ValidationContext, name: &str, local_type: &str, span: &Span) {
+    ctx.intellisense.push(IntellisenseHint {
+        start: span.start,
+        end: span.end,
+        goto_offset: span.start,
+        label: format!("let {}: {}", name, local_type),
+        kind: IntellisenseItemKind::Variable,
+        detail: "type".to_string(),
+        suggestions: vec![],
+    });
+}
+
 fn build_shader_expression(
-    _alerts: &mut Vec<SpannedAlert>,
+    _context: &mut ValidationContext,
     graph: &SymbolGraph,
     scope: &Scope,
     shader_def: &mut TypedShaderDefinition,
@@ -1000,7 +1152,7 @@ fn build_shader_expression(
 
             if let Some(func) = intermediate.functions.get(func_name) {
                 build_shader_definition(
-                    _alerts,
+                    _context,
                     graph,
                     scope,
                     shader_def,
@@ -1012,7 +1164,7 @@ fn build_shader_expression(
 
             for arg in args {
                 build_shader_expression(
-                    _alerts,
+                    _context,
                     graph,
                     scope,
                     shader_def,
@@ -1033,7 +1185,7 @@ fn build_shader_expression(
             }
         }
         TypedExpression::KVMap(_, _) => {}
-        TypedExpression::Shader(_, span) => _alerts.push(SpannedAlert::error(
+        TypedExpression::Shader(_, span) => _context.alerts.push(SpannedAlert::error(
             "Illegal shader def".to_string(),
             "Shaders cannot be defined inside other shaders".to_string(),
             Location::new(file_name.to_string(), USizeTuple(span.start, span.end)),
@@ -1044,7 +1196,7 @@ fn build_shader_expression(
 
 // Recursively descends into the Typed tree and adds references to the shader_inst
 fn build_shader_definition(
-    _alerts: &mut Vec<SpannedAlert>,
+    _context: &mut ValidationContext,
     graph: &SymbolGraph,
     new_scope: &Scope,
     shader_def: &mut TypedShaderDefinition,
@@ -1054,7 +1206,7 @@ fn build_shader_definition(
 ) {
     for statement in &typed_body.statements {
         match statement {
-            TypedStatement::Return(_, span) => _alerts.push(SpannedAlert::error(
+            TypedStatement::Return(_, span) => _context.alerts.push(SpannedAlert::error(
                 "Return statement not allowed in shader".to_string(),
                 "Return statements are only allowed in functions".to_string(),
                 Location::new(file_name.to_string(), USizeTuple(span.start, span.end)),
@@ -1067,7 +1219,7 @@ fn build_shader_definition(
                 span: _,
             } => {
                 build_shader_expression(
-                    _alerts,
+                    _context,
                     graph,
                     new_scope,
                     shader_def,
@@ -1076,7 +1228,7 @@ fn build_shader_definition(
                     condition,
                 );
                 build_shader_definition(
-                    _alerts,
+                    _context,
                     graph,
                     new_scope,
                     shader_def,
@@ -1086,7 +1238,7 @@ fn build_shader_definition(
                 );
                 for else_if in else_ifs {
                     build_shader_expression(
-                        _alerts,
+                        _context,
                         graph,
                         new_scope,
                         shader_def,
@@ -1095,7 +1247,7 @@ fn build_shader_definition(
                         &else_if.0,
                     );
                     build_shader_definition(
-                        _alerts,
+                        _context,
                         graph,
                         new_scope,
                         shader_def,
@@ -1106,7 +1258,7 @@ fn build_shader_definition(
                 }
                 if let Some(else_body) = else_body {
                     build_shader_definition(
-                        _alerts,
+                        _context,
                         graph,
                         new_scope,
                         shader_def,
@@ -1122,7 +1274,7 @@ fn build_shader_definition(
                 span: _,
             } => {
                 build_shader_expression(
-                    _alerts,
+                    _context,
                     graph,
                     new_scope,
                     shader_def,
@@ -1133,7 +1285,7 @@ fn build_shader_definition(
             }
             TypedStatement::Expression(expr, _) => {
                 build_shader_expression(
-                    _alerts,
+                    _context,
                     graph,
                     new_scope,
                     shader_def,
@@ -1350,7 +1502,7 @@ impl ToString for ExpandedType {
 }
 
 fn check_body_local(
-    _alerts: &mut Vec<SpannedAlert>,
+    _context: &mut ValidationContext,
     scope: &mut Scope,
     graph: &SymbolGraph,
     file_name: &str,
@@ -1367,7 +1519,7 @@ fn check_body_local(
             ast::Root::Let(_let) => {
                 let t = scope.check(&_let.name.name);
                 if t.is_some() {
-                    _alerts.push(SpannedAlert::error(
+                    _context.alerts.push(SpannedAlert::error(
                         "Hiding variable".to_string(),
                         format!("'{}' is already defined in this scope", _let.name.name),
                         Location::new(
@@ -1380,7 +1532,7 @@ fn check_body_local(
                     let mut _to_typed_expr = TypedExpression::Value(TypedValue::Null, 0..0);
                     if _let.to.is_some() {
                         (_to_val, _to_typed_expr) = get_type_local(
-                            _alerts,
+                            _context,
                             scope,
                             graph,
                             file_name,
@@ -1407,7 +1559,7 @@ fn check_body_local(
             }
             ast::Root::Expression(expr) => {
                 let (_, typed_expr) =
-                    get_type_local(_alerts, scope, graph, file_name, intermediate, expr);
+                    get_type_local(_context, scope, graph, file_name, intermediate, expr);
 
                 typed_body
                     .statements
@@ -1415,7 +1567,7 @@ fn check_body_local(
             }
             ast::Root::If(_if) => {
                 let (_type, _cond_typed) = get_type_local(
-                    _alerts,
+                    _context,
                     scope,
                     graph,
                     file_name,
@@ -1424,7 +1576,7 @@ fn check_body_local(
                 );
 
                 if _type != "bool" {
-                    _alerts.push(SpannedAlert::error(
+                    _context.alerts.push(SpannedAlert::error(
                         "Expected bool-like expression in if".to_string(),
                         format!("got: '{}'", _type),
                         Location::new(
@@ -1440,7 +1592,7 @@ fn check_body_local(
                 let mut new_scope = Scope::new();
                 new_scope.parent = Some(Box::new(scope));
                 let _typed_body = check_body_local(
-                    _alerts,
+                    _context,
                     &mut new_scope,
                     graph,
                     file_name,
@@ -1454,7 +1606,7 @@ fn check_body_local(
 
                 for elif in &_if.else_ifs {
                     let (_type, _else_if_typed_cond) = get_type_local(
-                        _alerts,
+                        _context,
                         scope,
                         graph,
                         file_name,
@@ -1462,7 +1614,7 @@ fn check_body_local(
                         &elif.condition,
                     );
                     if _type != "bool" {
-                        _alerts.push(SpannedAlert::error(
+                        _context.alerts.push(SpannedAlert::error(
                             "Expected bool-like expression in else if".to_string(),
                             format!("got: '{}'", _type),
                             Location::new(
@@ -1478,7 +1630,7 @@ fn check_body_local(
                     let mut new_scope = Scope::new();
                     new_scope.parent = Some(Box::new(scope));
                     let else_if_typed = check_body_local(
-                        _alerts,
+                        _context,
                         &mut new_scope,
                         graph,
                         file_name,
@@ -1494,7 +1646,7 @@ fn check_body_local(
                     let mut new_scope = Scope::new();
                     new_scope.parent = Some(Box::new(scope));
                     let _typed_else_body = check_body_local(
-                        _alerts,
+                        _context,
                         &mut new_scope,
                         graph,
                         file_name,
@@ -1517,7 +1669,7 @@ fn check_body_local(
             ast::Root::Return(_return) => {
                 if _return.value.is_some() {
                     let (_type, typed_expr) = get_type_local(
-                        _alerts,
+                        _context,
                         scope,
                         graph,
                         file_name,
@@ -1526,7 +1678,7 @@ fn check_body_local(
                     );
                     let expanded_type = ExpandedType::from_string(graph, file_name, &_type);
                     if !expanded_type.is_compatible_with(output) {
-                        _alerts.push(SpannedAlert::error(
+                        _context.alerts.push(SpannedAlert::error(
                             "Incompatible return type".to_string(),
                             format!("expected: '{}', got: '{}'", output.to_string(), _type),
                             Location::new(
@@ -1545,7 +1697,7 @@ fn check_body_local(
                     ));
                 } else {
                     if output.to_string() != "void" {
-                        _alerts.push(SpannedAlert::error(
+                        _context.alerts.push(SpannedAlert::error(
                             "Incompatible return type".to_string(),
                             format!("expected: '{}', got: '{}'", output.to_string(), "void"),
                             Location::new(
@@ -1556,7 +1708,7 @@ fn check_body_local(
                     }
                 }
             }
-            _ => _alerts.push(SpannedAlert::error(
+            _ => _context.alerts.push(SpannedAlert::error(
                 format!("You cannot define this here"),
                 format!("Attempting to define {}", root.get_kind()),
                 Location::new(
@@ -1574,8 +1726,11 @@ fn check_body_local(
 pub fn validate<'a>(
     graph: &'a SymbolGraph,
     file_name: &str,
-) -> (Vec<SpannedAlert>, TypedIntermediate) {
-    let mut alerts = Vec::new();
+) -> (ValidationContext, TypedIntermediate) {
+    let mut context = ValidationContext {
+        alerts: Vec::new(),
+        intellisense: Vec::new(),
+    };
 
     let file = graph.files.get(file_name);
     let mut typed = TypedIntermediate {
@@ -1585,36 +1740,44 @@ pub fn validate<'a>(
     };
 
     if file.is_none() {
-        return (alerts, typed);
+        return (context, typed);
     }
 
     let file = file.unwrap();
 
-    let check_type = |_alerts: &mut Vec<SpannedAlert>, name: &ast::Identifier| {
-        check_type_local(_alerts, graph, file_name, name);
+    let check_type = |_context: &mut ValidationContext, name: &ast::Identifier| {
+        check_type_local(_context, graph, file_name, name);
     };
 
     // let parse_symbol_type =
-    //     |_alerts: &mut Vec<SpannedAlert>, scope: Scope, expr: Expression| -> ExpandedType {};
+    //     |_context: &mut ValidationContext, scope: Scope, expr: Expression| -> ExpandedType {};
 
-    // let get_type = |_alerts: &mut Vec<SpannedAlert>,
+    // let get_type = |_context: &mut ValidationContext,
     //                 scope: &Scope,
     //                 expr: &Expression|
     //  -> (String, TypedExpression) {
 
     // };
 
-    let _check_body = |_alerts: &mut Vec<SpannedAlert>,
+    let _check_body = |_context: &mut ValidationContext,
                        scope: &mut Scope,
                        body: &Vec<ast::Root>,
                        intermediate: &mut TypedIntermediate,
                        output: &ExpandedType|
      -> TypedBody {
-        check_body_local(_alerts, scope, graph, file_name, intermediate, body, output)
+        check_body_local(
+            _context,
+            scope,
+            graph,
+            file_name,
+            intermediate,
+            body,
+            output,
+        )
     };
 
     fn add_function_local<'a>(
-        _alerts: &mut Vec<SpannedAlert>,
+        _context: &mut ValidationContext,
         graph: &'a SymbolGraph,
         file_name: &str,
         intermediate: &mut TypedIntermediate,
@@ -1623,7 +1786,7 @@ pub fn validate<'a>(
         for (i, param) in function.parameters.iter().enumerate() {
             for (j, param2) in function.parameters.iter().enumerate() {
                 if i < j && param.0.name == param2.0.name {
-                    _alerts.push(SpannedAlert::error_2(
+                    _context.alerts.push(SpannedAlert::error_2(
                         format!("Duplicate"),
                         format!("Duplicate parameter name: '{}'", param2.0.name),
                         Location::new(
@@ -1639,7 +1802,7 @@ pub fn validate<'a>(
                 }
             }
 
-            check_type_local(_alerts, graph, file_name, &param.1);
+            check_type_local(_context, graph, file_name, &param.1);
         }
 
         let mut scope = Scope::new();
@@ -1655,7 +1818,7 @@ pub fn validate<'a>(
         };
 
         let typed_body = check_body_local(
-            _alerts,
+            _context,
             &mut scope,
             &graph,
             file_name,
@@ -1685,7 +1848,7 @@ pub fn validate<'a>(
                     default_value: match expr {
                         Some(expr) => Some(
                             get_type_local(
-                                _alerts,
+                                _context,
                                 &scope,
                                 graph,
                                 file_name,
@@ -1716,14 +1879,18 @@ pub fn validate<'a>(
         match &symbol.root {
             ast::Root::Function(function) => {
                 let typed_func =
-                    add_function_local(&mut alerts, graph, file_name, &mut typed, function);
+                    add_function_local(&mut context, graph, file_name, &mut typed, function);
                 typed.functions.insert(typed_func.name.clone(), typed_func);
+
+                add_function_hint(&mut context, &symbol, &symbol.root.get_def_span());
             }
             ast::Root::Struct(_struct) => {
+                add_type_hint(&mut context, &symbol, &symbol.root.get_def_span());
+
                 for (i, field) in _struct.fields.iter().enumerate() {
                     for (j, field2) in _struct.fields.iter().enumerate() {
                         if i < j && field.0.name == field2.0.name {
-                            alerts.push(SpannedAlert::error_2(
+                            context.alerts.push(SpannedAlert::error_2(
                                 format!("Duplicate"),
                                 format!("Duplicate field name: '{}'", field2.0.name),
                                 Location::new(
@@ -1739,7 +1906,7 @@ pub fn validate<'a>(
                         }
                     }
 
-                    check_type(&mut alerts, &field.1);
+                    check_type(&mut context, &field.1);
                 }
 
                 typed.structs.push((
@@ -1834,7 +2001,7 @@ pub fn validate<'a>(
                     match method {
                         ast::Root::Function(func) => {
                             let func_typed = add_function_local(
-                                &mut alerts,
+                                &mut context,
                                 graph,
                                 file_name,
                                 &mut typed,
@@ -1853,7 +2020,71 @@ pub fn validate<'a>(
         }
     }
 
-    (alerts, typed)
+    (context, typed)
+}
+
+fn add_type_field_hint(
+    ctx: &mut ValidationContext,
+    symbol: &SymbolNode,
+    name: &str,
+    ty: &str,
+    span: &Span,
+) {
+    ctx.intellisense.push(IntellisenseHint {
+        start: span.start,
+        end: span.end,
+        goto_offset: symbol.span.start,
+        label: format!("{}::{}: {}", symbol.name, name, ty),
+        kind: IntellisenseItemKind::Field,
+        detail: "field".to_string(),
+        suggestions: vec![],
+    });
+}
+
+fn add_type_method_hint(
+    ctx: &mut ValidationContext,
+    symbol: &SymbolNode,
+    name: &str,
+    method: &SymbolFunction,
+    span: &Span,
+) {
+    let func_hint = get_hint_for_function(name, &method);
+    ctx.intellisense.push(IntellisenseHint {
+        start: span.start,
+        end: span.end,
+        goto_offset: method.span.start,
+        label: format!("{}::{}{}", symbol.name, func_hint.label, func_hint.detail),
+        kind: IntellisenseItemKind::Field,
+        detail: "field".to_string(),
+        suggestions: vec![],
+    });
+}
+
+fn add_type_hint(ctx: &mut ValidationContext, symbol: &SymbolNode, span: &Span) {
+    ctx.intellisense.push(IntellisenseHint {
+        start: span.start,
+        end: span.end,
+        goto_offset: symbol.span.start,
+        label: format!("struct {}", symbol.name),
+        kind: IntellisenseItemKind::Type,
+        detail: "type".to_string(),
+        suggestions: vec![],
+    });
+}
+
+fn add_function_hint(ctx: &mut ValidationContext, symbol: &SymbolNode, span: &Span) {
+    if let SymbolDefinition::Function(func_def) = &symbol.definition {
+        let func_hint = get_hint_for_function(&symbol.name, &func_def);
+        ctx.intellisense.push(IntellisenseHint {
+            start: span.start,
+            end: span.end,
+            goto_offset: symbol.span.start,
+            label: format!("fn {}{}", func_hint.label, func_hint.detail),
+            kind: IntellisenseItemKind::Function,
+            detail: "".to_string(),
+            suggestions: vec![],
+        });
+    }
 }
 
 pub fn tag_function(intermediate: &mut TypedIntermediate, func_name: &str) {
@@ -1938,12 +2169,15 @@ pub fn propagate_tags_from_expression(
 
     match expr {
         TypedExpression::Call(func_name, exprs, span) => {
-            tag_function(intermediate, func_name);
-            let func = intermediate.functions.get(func_name).unwrap();
-            tags.append(&mut retag(func_name, span, &mut func.tags.clone()));
+            if let Some(_) = intermediate.functions.get(func_name) {
+                tag_function(intermediate, func_name);
 
-            for expr in exprs {
-                tags.append(&mut propagate_tags_from_expression(intermediate, expr));
+                let func = intermediate.functions.get(func_name).unwrap();
+                tags.append(&mut retag(func_name, span, &mut func.tags.clone()));
+
+                for expr in exprs {
+                    tags.append(&mut propagate_tags_from_expression(intermediate, expr));
+                }
             }
         }
         TypedExpression::Value(_, _) => {}

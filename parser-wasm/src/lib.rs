@@ -3,7 +3,7 @@ use js_sys::Array;
 
 use wasm_bindgen::prelude::*;
 
-use parser::{self, environment};
+use parser::{self, environment, graph::SymbolDefinition};
 extern crate console_error_panic_hook;
 use std::panic;
 
@@ -48,10 +48,11 @@ pub fn set_file(e: &mut environment::Environment, name: String, source: String) 
 }
 
 #[wasm_bindgen]
-pub fn parse_file(e: &mut environment::Environment, name: &str) {
+pub fn parse_file(e: &mut environment::Environment, name: &str) -> bool {
     panic::set_hook(Box::new(console_error_panic_hook::hook));
-    let _ = e.parse_file(name);
+    let has_ast = e.parse_file(name).unwrap();
     e.process_file(name);
+    has_ast
 }
 
 #[wasm_bindgen]
@@ -63,4 +64,110 @@ pub fn get_file_alerts(e: &mut environment::Environment, name: &str) -> Array {
         arr.push(&JsValue::from(alert));
     }
     return arr;
+}
+
+#[wasm_bindgen]
+pub fn generate_file(e: &mut environment::Environment, name: &str) -> String {
+    return e.generate_file(name);
+}
+
+#[wasm_bindgen]
+pub fn get_ast(e: &mut environment::Environment, name: &str) -> String {
+    return e.get_ast(name);
+}
+
+#[wasm_bindgen]
+pub fn get_intellisense(e: &mut environment::Environment, name: &str) -> JsValue {
+    let hints = e.get_intellisense(name);
+
+    serde_wasm_bindgen::to_value(&hints).unwrap()
+}
+
+#[wasm_bindgen(getter_with_clone)]
+struct ExternalSymbol {
+    pub name: String,
+    pub aliased: bool,
+    pub imported: bool,
+    pub file: String,
+    pub kind: String,
+}
+
+#[wasm_bindgen]
+pub fn get_symbols(e: &mut environment::Environment) -> Array {
+    let symbols = Array::new();
+
+    e.get_graph().files.iter().for_each(|(file_name, file)| {
+        file.iter().for_each(|(_name, symbol)| {
+            symbols.push(&JsValue::from(ExternalSymbol {
+                name: symbol.name.clone(),
+                file: file_name.clone(),
+                aliased: symbol.aliased,
+                imported: symbol.imported,
+                kind: match symbol.definition {
+                    SymbolDefinition::Function(_) => "function",
+                    SymbolDefinition::Type(_) => "type",
+                    _ => "unknown",
+                }
+                .to_string(),
+            }));
+        });
+    });
+
+    symbols
+}
+
+#[derive(Clone)]
+#[wasm_bindgen(getter_with_clone)]
+struct Span {
+    pub start: usize,
+    pub end: usize,
+}
+
+#[wasm_bindgen(getter_with_clone)]
+struct ExternalImportName {
+    pub name: String,
+    pub alias: Option<String>,
+    pub span: Span,
+}
+
+#[wasm_bindgen(getter_with_clone)]
+struct ExternalImport {
+    pub imports: Array,
+    pub path: String,
+    pub span: Span,
+}
+
+#[wasm_bindgen]
+pub fn get_imports(e: &mut environment::Environment, name: &str) -> Array {
+    let symbols = Array::new();
+
+    let imps = e.get_imports(name);
+
+    for imp in imps {
+        let exnames = Array::new();
+        for iname in imp.name {
+            exnames.push(&JsValue::from(ExternalImportName {
+                name: iname.name.name,
+                alias: match iname.alias {
+                    Some(a) => Some(a.name),
+                    None => None,
+                },
+                span: Span {
+                    start: iname.name.span.start,
+                    end: iname.name.span.end,
+                },
+            }));
+        }
+
+        symbols.push(&JsValue::from(ExternalImport {
+            imports: exnames,
+            path: imp.path.value,
+            span: Span {
+                start: imp.path.span.start,
+                end: imp.path.span.end,
+            },
+        }));
+    }
+
+    symbols
 }

@@ -23,8 +23,11 @@ export default class ShadeupEnvironment {
     console.log(exp);
     this.env = exp.make_environment();
 
-    this.updateFile("test", "fn test() {}");
-    this.evaluate("test");
+    this.updateFile(
+      "geometry",
+      "fn Cube() {} fn Pyramid() {} fn Cylinder() {} fn Sphere() {} fn IcoSphere() {} fn Plane() {}"
+    );
+    this.evaluate("geometry");
   }
 
   loaded() {
@@ -49,7 +52,11 @@ export default class ShadeupEnvironment {
     return this.alerts.get(filename) || [];
   }
 
-  evaluate(filename: string) {
+  getIntellisense(filename: string) {
+    return this.mod.get_intellisense(this.env, filename) || [];
+  }
+
+  evaluate(filename: string): boolean {
     let now = performance.now();
     const content = this.files.get(filename);
     // const ast = this.parse(content);
@@ -60,14 +67,31 @@ export default class ShadeupEnvironment {
 
     // this.alerts.set(filename, ast.alerts);
 
-    this.mod.parse_file(this.env, filename);
+    let successfulParse = this.mod.parse_file(this.env, filename);
 
     let alerts = this.mod.get_file_alerts(this.env, filename);
     this.alerts.set(filename, alerts);
+
+    return successfulParse;
+  }
+
+  getAst(filename: string) {
+    return this.mod.get_ast(this.env, filename);
   }
 
   updateFile(filename: string, content: string) {
     this.files.set(filename, content);
     this.mod.set_file(this.env, filename, content);
+  }
+
+  generateFile(filename: string): string {
+    return this.mod.generate_file(this.env, filename);
+  }
+  getImports(filename: string) {
+    return this.mod.get_imports(this.env, filename);
+  }
+
+  getSymbols() {
+    return this.mod.get_symbols(this.env);
   }
 }

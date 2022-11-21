@@ -7,11 +7,11 @@ use std::vec::Vec;
 
 pub type Span = std::ops::Range<usize>;
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 #[cfg_attr(feature = "wasm", wasm_bindgen)]
 pub struct USizeTuple(pub usize, pub usize);
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 #[cfg_attr(feature = "wasm", wasm_bindgen)]
 pub struct Location {
     file: String,
@@ -54,27 +54,27 @@ impl Location {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Identifier {
     pub name: String,
     pub span: Span,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct SymbolName {
     pub value: Identifier,
 
     pub alias: Option<Box<SymbolName>>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct StringLiteral {
     pub value: String,
     pub span: Span,
     // pub location: Location,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Function {
     pub name: Identifier,
     pub body: Block,
@@ -83,14 +83,14 @@ pub struct Function {
     pub span: Span,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Impl {
     pub name: Identifier,
     pub body: Vec<Root>,
     pub span: Span,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum Root {
     Import(Import),
     Function(Function),
@@ -137,9 +137,25 @@ impl Root {
             Root::Error => Span { start: 0, end: 0 },
         }
     }
+
+    pub fn get_def_span(&self) -> Span {
+        match self {
+            Root::Import(i) => i.path.span.clone(),
+            Root::Function(f) => f.name.span.clone(),
+            Root::Main(b) => b.span.clone(),
+            Root::Shader(b) => b.span.clone(),
+            Root::Expression(e) => e.get_span(),
+            Root::Struct(s) => s.name.span.clone(),
+            Root::Impl(i) => i.name.span.clone(),
+            Root::If(i) => i.span.clone(),
+            Root::Let(l) => l.span.clone(),
+            Root::Return(r) => r.span.clone(),
+            Root::Error => Span { start: 0, end: 0 },
+        }
+    }
 }
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, Debug)]
 pub enum Value {
     Null,
     Bool(bool),
@@ -151,7 +167,7 @@ pub enum Value {
 }
 
 #[allow(dead_code)]
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum Expression {
     Identifier((Identifier, Span)),
     List((Vec<Expression>, Span)),
@@ -182,14 +198,14 @@ impl Expression {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Call {
     pub expression: Box<Expression>,
     pub args: Vec<Expression>,
     pub span: Span,
 }
 
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Op {
     RFlow,
     EqEq,
@@ -279,7 +295,7 @@ impl Op {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct If {
     pub condition: Expression,
     pub body: Block,
@@ -288,7 +304,7 @@ pub struct If {
     pub span: Span,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Let {
     pub name: Identifier,
     pub value_type: Option<Identifier>,
@@ -297,34 +313,34 @@ pub struct Let {
     pub span: Span,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Return {
     pub value: Option<Expression>,
 
     pub span: Span,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Struct {
     pub name: Identifier,
     pub fields: Vec<(Identifier, Identifier)>,
     pub span: Span,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ImportName {
     pub name: Identifier,
     pub alias: Option<Identifier>,
     pub span: Span,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Import {
     pub path: StringLiteral,
     pub name: Vec<ImportName>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Block {
     pub span: Span,
     pub roots: Vec<Root>,
