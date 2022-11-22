@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use std::collections::HashMap;
 
-use crate::ast::{self, Expression, Location, Op, Span, USizeTuple};
+use crate::ast::{self, Call, Expression, Location, Op, Span, USizeTuple};
 use crate::graph::{SymbolDefinition, SymbolFunction, SymbolGraph, SymbolNode, SymbolType};
 use crate::printer::SpannedAlert;
 
@@ -194,31 +194,32 @@ fn shake_expression(
 ) {
     match typed_expression {
         TypedExpression::Call(func_name, args, _) => {
-            let func = in_intermediate.functions.get(func_name).unwrap();
-            if out_intermediate.functions.get(func_name).is_none() {
-                out_intermediate
-                    .functions
-                    .insert(func_name.clone(), func.clone());
+            if let Some(func) = in_intermediate.functions.get(func_name) {
+                if out_intermediate.functions.get(func_name).is_none() {
+                    out_intermediate
+                        .functions
+                        .insert(func_name.clone(), func.clone());
 
-                shake_body(
-                    graph,
-                    scope,
-                    file_name,
-                    in_intermediate,
-                    out_intermediate,
-                    &func.body,
-                );
-            }
+                    shake_body(
+                        graph,
+                        scope,
+                        file_name,
+                        in_intermediate,
+                        out_intermediate,
+                        &func.body,
+                    );
+                }
 
-            for arg in args {
-                shake_expression(
-                    graph,
-                    scope,
-                    file_name,
-                    in_intermediate,
-                    out_intermediate,
-                    arg,
-                );
+                for arg in args {
+                    shake_expression(
+                        graph,
+                        scope,
+                        file_name,
+                        in_intermediate,
+                        out_intermediate,
+                        arg,
+                    );
+                }
             }
         }
         TypedExpression::Value(_, _) => {}
@@ -636,6 +637,117 @@ pub fn add_struct_hints(ctx: &mut ValidationContext, symbol: &SymbolType, span: 
     });
 }
 
+pub fn get_call_local(
+    _context: &mut ValidationContext,
+    scope: &Scope,
+    graph: &SymbolGraph,
+    file_name: &str,
+    intermediate: &mut TypedIntermediate,
+    call: &Call,
+    func_type: &ExpandedType,
+    typed_expr: &TypedExpression,
+) -> (String, TypedExpression) {
+    let mut typed_args = Vec::new();
+
+    if func_type.name == "function" {
+        let mut out_type = "!error".to_string();
+        if func_type.generics.len() > 0 {
+            out_type = func_type.generics[0].name.clone();
+        }
+
+        if call.args.len() > func_type.generics.len() - 1 {
+            _context.alerts.push(SpannedAlert::error(
+                "Too many arguments".to_string(),
+                format!(
+                    "Expected {} arguments but got {}",
+                    func_type.generics.len() - 1,
+                    call.args.len()
+                ),
+                Location::new(
+                    file_name.to_string(),
+                    USizeTuple(call.span.start, call.span.end),
+                ),
+            ));
+        }
+
+        for (i, param) in func_type.generics.iter().skip(1).enumerate() {
+            if i >= call.args.len() {
+                if param.name == "__optional" {
+                    continue;
+                } else {
+                    _context.alerts.push(SpannedAlert::error(
+                        "Too few arguments".to_string(),
+                        format!(
+                            "Expected {} arguments but got {}",
+                            func_type.generics.len() - 1,
+                            call.args.len()
+                        ),
+                        Location::new(
+                            file_name.to_string(),
+                            USizeTuple(call.span.start, call.span.end),
+                        ),
+                    ));
+                    break;
+                }
+            }
+
+            let (arg_type_string, typed_arg) = get_type_local(
+                _context,
+                scope,
+                graph,
+                file_name,
+                intermediate,
+                &call.args[i],
+            );
+
+            let arg_type = ExpandedType::from_string(graph, file_name, &arg_type_string);
+
+            let real_param_type = if param.name == "__optional" {
+                &param.generics[0]
+            } else {
+                &param
+            };
+
+            typed_args.push(arg_type.wrap_cast(real_param_type, typed_arg));
+
+            if !arg_type.is_compatible_with(real_param_type) {
+                _context.alerts.push(SpannedAlert::error(
+                    "Argument type mismatch".to_string(),
+                    format!(
+                        "Expected type '{}' but got type '{}'",
+                        real_param_type.to_string(),
+                        arg_type.to_string(),
+                    ),
+                    Location::new(
+                        file_name.to_string(),
+                        USizeTuple(call.args[i].get_span().start, call.args[i].get_span().end),
+                    ),
+                ));
+            }
+        }
+
+        let func_name = match &typed_expr {
+            TypedExpression::Identifier(name, _) => name.clone(),
+            _ => "!error".to_string(),
+        };
+
+        (
+            out_type,
+            TypedExpression::Call(func_name, typed_args, call.span.clone()),
+        )
+    } else {
+        _context.alerts.push(SpannedAlert::error(
+            "Expected something callable".to_string(),
+            format!("got: '{}'", func_type.name),
+            Location::new(
+                file_name.to_string(),
+                USizeTuple(call.span.start, call.span.end),
+            ),
+        ));
+        ("!error".to_string(), TypedExpression::Error())
+    }
+}
+
 pub fn get_type_local(
     _context: &mut ValidationContext,
     scope: &Scope,
@@ -742,109 +854,18 @@ pub fn get_type_local(
                 &call.expression,
             );
 
-            let mut typed_args = Vec::new();
-
             let func_type = ExpandedType::from_string(graph, file_name, &func_type);
-            if func_type.name == "function" {
-                let mut out_type = "!error".to_string();
-                if func_type.generics.len() > 0 {
-                    out_type = func_type.generics[0].name.clone();
-                }
 
-                if call.args.len() > func_type.generics.len() - 1 {
-                    _context.alerts.push(SpannedAlert::error(
-                        "Too many arguments".to_string(),
-                        format!(
-                            "Expected {} arguments but got {}",
-                            func_type.generics.len() - 1,
-                            call.args.len()
-                        ),
-                        Location::new(
-                            file_name.to_string(),
-                            USizeTuple(call.span.start, call.span.end),
-                        ),
-                    ));
-                }
-
-                for (i, param) in func_type.generics.iter().skip(1).enumerate() {
-                    if i >= call.args.len() {
-                        if param.name == "__optional" {
-                            continue;
-                        } else {
-                            _context.alerts.push(SpannedAlert::error(
-                                "Too few arguments".to_string(),
-                                format!(
-                                    "Expected {} arguments but got {}",
-                                    func_type.generics.len() - 1,
-                                    call.args.len()
-                                ),
-                                Location::new(
-                                    file_name.to_string(),
-                                    USizeTuple(call.span.start, call.span.end),
-                                ),
-                            ));
-                            break;
-                        }
-                    }
-
-                    let (arg_type_string, typed_arg) = get_type_local(
-                        _context,
-                        scope,
-                        graph,
-                        file_name,
-                        intermediate,
-                        &call.args[i],
-                    );
-
-                    let arg_type = ExpandedType::from_string(graph, file_name, &arg_type_string);
-
-                    let real_param_type = if param.name == "__optional" {
-                        &param.generics[0]
-                    } else {
-                        &param
-                    };
-
-                    typed_args.push(arg_type.wrap_cast(real_param_type, typed_arg));
-
-                    if !arg_type.is_compatible_with(real_param_type) {
-                        _context.alerts.push(SpannedAlert::error(
-                            "Argument type mismatch".to_string(),
-                            format!(
-                                "Expected type '{}' but got type '{}'",
-                                real_param_type.to_string(),
-                                arg_type.to_string(),
-                            ),
-                            Location::new(
-                                file_name.to_string(),
-                                USizeTuple(
-                                    call.args[i].get_span().start,
-                                    call.args[i].get_span().end,
-                                ),
-                            ),
-                        ));
-                    }
-                }
-
-                let func_name = match &typed_expr {
-                    TypedExpression::Identifier(name, _) => name.clone(),
-                    _ => "!error".to_string(),
-                };
-
-                (
-                    out_type,
-                    TypedExpression::Call(func_name, typed_args, call.span.clone()),
-                )
-            } else {
-                _context.alerts.push(SpannedAlert::error(
-                    "Expected something callable".to_string(),
-                    format!("got: '{}'", func_type.name),
-                    Location::new(
-                        file_name.to_string(),
-                        USizeTuple(call.span.start, call.span.end),
-                    ),
-                ));
-                ("!error".to_string(), TypedExpression::Error())
-            }
+            get_call_local(
+                _context,
+                scope,
+                graph,
+                file_name,
+                intermediate,
+                call,
+                &func_type,
+                &typed_expr,
+            )
         }
         ast::Expression::InlineBlock((block, _)) => {
             let output = ExpandedType::from_string(graph, file_name, "shader");
@@ -961,76 +982,48 @@ pub fn get_type_local(
                         graph.get_symbol_node_in_file(file_name, &lhs_type.name)
                     {
                         if let ast::Expression::Identifier(rhs_ident) = rhs.as_ref() {
-                            let field = lhs_symbol.fields.iter().find(|x| x.0 == rhs_ident.0.name);
-                            let method =
-                                lhs_symbol.methods.iter().find(|x| x.0 == rhs_ident.0.name);
-                            if let Some(field) = field {
-                                add_type_field_hint(
+                            return get_type_field_dot(
+                                _context,
+                                graph,
+                                file_name,
+                                &lhs_type,
+                                &lhs_typed_expr,
+                                lhs_symbol,
+                                lhs_symbol_node,
+                                rhs_ident,
+                                &span,
+                            );
+                        } else if let ast::Expression::Call(call) = rhs.as_ref() {
+                            if let ast::Expression::Identifier(rhs_ident) =
+                                call.0.expression.as_ref()
+                            {
+                                let (func_type, typed_expr) = get_type_field_dot(
                                     _context,
+                                    graph,
+                                    file_name,
+                                    &lhs_type,
+                                    &lhs_typed_expr,
+                                    lhs_symbol,
                                     lhs_symbol_node,
-                                    &field.0,
-                                    &field.1,
-                                    span,
+                                    rhs_ident,
+                                    &span,
                                 );
-                                return (
-                                    field.1.clone(),
-                                    TypedExpression::Call(
-                                        format!(
-                                            "__get_struct_{}_{}",
-                                            lhs_symbol_node.get_namespaced(),
-                                            field.0
-                                        ),
-                                        vec![lhs_typed_expr],
-                                        span.clone(),
-                                    ),
-                                );
-                            } else if let Some(ref method) = method {
-                                add_type_method_hint(
+
+                                let func_type =
+                                    ExpandedType::from_string(graph, file_name, &func_type);
+
+                                get_call_local(
                                     _context,
-                                    lhs_symbol_node,
-                                    &method.0,
-                                    &method.1,
-                                    span,
-                                );
-                                return (
-                                    format!(
-                                        "function<{},{}>",
-                                        method.1.return_type.clone().unwrap_or("void".to_owned()),
-                                        method
-                                            .1
-                                            .parameters
-                                            .iter()
-                                            .map(|x| if x.2 {
-                                                format!("__optional<{}>", x.1.clone())
-                                            } else {
-                                                x.1.clone()
-                                            })
-                                            .collect::<Vec<String>>()
-                                            .join(",")
-                                    ),
-                                    TypedExpression::Identifier(
-                                        format!(
-                                            "__{}_{}",
-                                            lhs_symbol_node.get_namespaced(),
-                                            method.0
-                                        ),
-                                        span.clone(),
-                                    ),
-                                );
+                                    scope,
+                                    graph,
+                                    file_name,
+                                    intermediate,
+                                    &call.0,
+                                    &func_type,
+                                    &typed_expr,
+                                )
                             } else {
-                                _context.alerts.push(SpannedAlert::error(
-                                    "Field not found".to_string(),
-                                    format!(
-                                        "'{}' does not have a member named '{}'",
-                                        lhs_type.name.clone(),
-                                        rhs_ident.0.name.clone()
-                                    ),
-                                    Location::new(
-                                        file_name.to_string(),
-                                        USizeTuple(span.start, span.end),
-                                    ),
-                                ));
-                                return ("!error".to_string(), TypedExpression::Error());
+                                ("!error".to_owned(), TypedExpression::Error())
                             }
                         } else {
                             let (rhs_type, _rhs_typed_expr) = get_type_local(
@@ -1122,6 +1115,70 @@ pub fn get_type_local(
             }
         }
         _ => ("!error".to_owned(), TypedExpression::Error()),
+    }
+}
+
+fn get_type_field_dot(
+    _context: &mut ValidationContext,
+    graph: &SymbolGraph,
+    file_name: &str,
+    lhs_type: &ExpandedType,
+    lhs_typed_expr: &TypedExpression,
+    lhs_symbol: &SymbolType,
+    lhs_symbol_node: &SymbolNode,
+    rhs_ident: &(ast::Identifier, Span),
+    span: &Span,
+) -> (String, TypedExpression) {
+    let field = lhs_symbol.fields.iter().find(|x| x.0 == rhs_ident.0.name);
+    let method = lhs_symbol.methods.iter().find(|x| x.0 == rhs_ident.0.name);
+    if let Some(field) = field {
+        add_type_field_hint(_context, lhs_symbol_node, &field.0, &field.1, span);
+        return (
+            field.1.clone(),
+            TypedExpression::Call(
+                format!(
+                    "__get_struct_{}_{}",
+                    lhs_symbol_node.get_namespaced(),
+                    field.0
+                ),
+                vec![lhs_typed_expr.clone()],
+                span.clone(),
+            ),
+        );
+    } else if let Some(ref method) = method {
+        add_type_method_hint(_context, lhs_symbol_node, &method.0, &method.1, span);
+        return (
+            format!(
+                "function<{},{}>",
+                method.1.return_type.clone().unwrap_or("void".to_owned()),
+                method
+                    .1
+                    .parameters
+                    .iter()
+                    .map(|x| if x.2 {
+                        format!("__optional<{}>", x.1.clone())
+                    } else {
+                        x.1.clone()
+                    })
+                    .collect::<Vec<String>>()
+                    .join(",")
+            ),
+            TypedExpression::Identifier(
+                format!("__{}_{}", lhs_symbol_node.get_namespaced(), method.0),
+                span.clone(),
+            ),
+        );
+    } else {
+        _context.alerts.push(SpannedAlert::error(
+            "Field not found".to_string(),
+            format!(
+                "'{}' does not have a member named '{}'",
+                lhs_type.name.clone(),
+                rhs_ident.0.name.clone()
+            ),
+            Location::new(file_name.to_string(), USizeTuple(span.start, span.end)),
+        ));
+        return ("!error".to_string(), TypedExpression::Error());
     }
 }
 

@@ -184,7 +184,7 @@ impl Environment {
             let (ctx, _typed) = crate::validator::validate(&self.graph, name);
             file.validation.extend(ctx.alerts);
             file.intellisense.extend(ctx.intellisense);
-            file.typed = Some(_typed);
+            typed = Some(_typed);
 
             // generated = generator::generate(&self.graph, name, &typed).javascript;
         } else {
@@ -379,7 +379,7 @@ impl Environment {
             crate::validator::tag_function(&mut typed, &k);
         }
 
-        let entry = "main".to_string();
+        let entry = "frame".to_string();
         let real_entry = format!("{}_{}", name.replace(".", "__"), entry);
 
         if let Some(_func) = typed.functions.get(&real_entry) {

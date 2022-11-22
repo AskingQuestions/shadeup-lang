@@ -105,9 +105,14 @@ impl t {
   fn test() {}
 }
 
-fn test() {
+fn test() -> t {
   let x = t {};
   let y = x.x;
+  return x;
+}
+
+fn frame() {
+  let x = test().test().x;
 }`;
 let ed = monaco.editor.create(document.getElementById("container")!, {
   model: monaco.editor.createModel(
