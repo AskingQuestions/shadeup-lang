@@ -429,31 +429,81 @@ fn block_parser() -> impl Parser<Token, Vec<ast::Root>, Error = Simple<Token>> +
                 });
 
             // Function calls have very high precedence so we prioritise them
+            let ident_expr = identifier
+                .clone()
+                .map(|id| ast::Expression::Identifier((id.clone(), id.span)));
+            let call = ident_expr
+                .clone()
+                .then(
+                    items
+                        .delimited_by(just(Token::Ctrl('(')), just(Token::Ctrl(')')))
+                        .map_with_span(|args, span: Span| (args, span))
+                        .repeated(),
+                )
+                .foldl(|f, args| {
+                    let span = f.get_span().start..args.1.end;
+                    ast::Expression::Call((
+                        ast::Call {
+                            args: args.0,
+                            expression: Box::new(f),
+                            span: span.clone(),
+                        },
+                        span,
+                    ))
+                });
 
-            let call = recursive(|call_recur| {
-                call_recur
-                    .or(dot.clone())
-                    .or(atom
-                        .clone()
-                        .then(
-                            items
-                                .delimited_by(just(Token::Ctrl('(')), just(Token::Ctrl(')')))
-                                .map_with_span(|args, span: Span| (args, span))
-                                .repeated(),
-                        )
-                        .foldl(|f, args| {
-                            let span = f.get_span().start..args.1.end;
-                            ast::Expression::Call((
-                                ast::Call {
-                                    args: args.0,
-                                    expression: Box::new(f),
-                                    span: span.clone(),
-                                },
-                                span,
-                            ))
-                        }))
-                    .or(atom.clone())
-            });
+            let op = just(Token::Op(Op::Dot)).to(Op::Dot);
+            let call_dot_chain = call
+                .clone()
+                .or(atom.clone())
+                .then(
+                    op.clone()
+                        .then(ident_expr.clone().or(call.clone()))
+                        .repeated(),
+                )
+                .foldl(|a, (op, b)| {
+                    let span = a.get_span().start..b.get_span().end;
+                    match b {
+                        ast::Expression::Call(call) => ast::Expression::Call((
+                            ast::Call {
+                                args: call.0.args,
+                                expression: Box::new(ast::Expression::Op((
+                                    Box::new(a),
+                                    Op::Dot,
+                                    call.0.expression,
+                                    span,
+                                ))),
+                                span: call.1.clone(),
+                            },
+                            call.1,
+                        )),
+                        _ => ast::Expression::Op((Box::new(a), op, Box::new(b), span)),
+                    }
+                });
+            // .map(|(a, b)| {
+            //     let span = a.get_span().start..b.last().unwrap().1.end;
+            //     b.into_iter().fold(a, |a, (op, b)| {
+            //         ast::Expression::Op((Box::new(a), op, Box::new(b), span))
+            //     })
+            // });
+
+            // let op = just(Token::Op(Op::Dot)).to(Op::Dot);
+            // let dot_call =
+            //     call.clone()
+            //         .then(
+            //             op.clone()
+            //                 .then(call.clone().or(atom.clone()).or_not().map_with_span(
+            //                     |val, span| match val {
+            //                         Some(val) => val,
+            //                         None => ast::Expression::Error(((), span)),
+            //                     },
+            //                 ))
+            //                 .repeated(),
+            //         )
+            //         .foldl(|a, (op, b)| {
+            //             let span = a.get_span().start..b.get_span().end;
+            //             ast::Expression::Op((Box::new(a), op, Box::new(b), span))
+            //         });
 
             let op = just(Token::Op(Op::Dot)).to(Op::Dot);
             let dot_call =
@@ -478,13 +528,13 @@ fn block_parser() -> impl Parser<Token, Vec<ast::Root>, Error = Simple<Token>> +
                 .to(Op::Mul)
                 .or(just(Token::Op(Op::Div)).to(Op::Div))
                 .or(just(Token::Op(Op::Sq)).to(Op::Sq));
-            let product =
-                call.clone()
-                    .then(op.then(call.clone()).repeated())
-                    .foldl(|a, (op, b)| {
-                        let span = a.get_span().start..b.get_span().end;
-                        ast::Expression::Op((Box::new(a), op, Box::new(b), span))
-                    });
+            let product = call_dot_chain
+                .clone()
+                .then(op.then(call_dot_chain.clone()).repeated())
+                .foldl(|a, (op, b)| {
+                    let span = a.get_span().start..b.get_span().end;
+                    ast::Expression::Op((Box::new(a), op, Box::new(b), span))
+                });
 
             // Sum ops (add and subtract) have equal precedence
             let op = just(Token::Op(Op::Add))

@@ -1,5 +1,4 @@
 {
-  "extends": "../monaco-languageclient/tsconfig.json",
   "compilerOptions": {
     "rootDir": "src",
     "outDir": "dist",
@@ -8,11 +7,6 @@
     "moduleResolution": "Node16",
     "lib": ["ES2022", "dom", "WebWorker"]
   },
-  "references": [
-    {
-      "path": "../monaco-languageclient/packages/client"
-    }
-  ],
   "include": ["src/**/*.ts"],
   "exclude": ["dist"]
 }

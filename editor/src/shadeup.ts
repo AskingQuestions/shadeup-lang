@@ -18,7 +18,7 @@ export default class ShadeupEnvironment {
   }
 
   async load() {
-    let exp = await import("../../parser-wasm/pkg/parser_wasm_bg");
+    let exp = await import("../../parser-wasm/pkg/parser_wasm_bg.js");
     this.mod = exp;
     console.log(exp);
     this.env = exp.make_environment();
