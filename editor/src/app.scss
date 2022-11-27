@@ -1,0 +1,9 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer components {
+	.panel {
+		@apply relative block bg-gray-800 rounded-xl border border-gray-600 p-8 shadow-xl;
+	}
+}

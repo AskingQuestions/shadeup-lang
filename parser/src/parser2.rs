@@ -67,10 +67,32 @@ fn lexer() -> impl Parser<char, Vec<(Token, Span)>, Error = Simple<char>> {
         .chain(just('.'))
         .chain::<char, _, _>(text::digits(10))
         .collect::<String>()
-        .map(Token::Real);
+        .then(
+            just('e')
+                .or(just('E'))
+                .chain::<char, _, _>(text::digits(10))
+                .collect::<String>()
+                .or_not(),
+        )
+        .map(|(num, exp)| {
+            let mut s = num;
+            if let Some(exp) = exp {
+                s.push_str(&exp);
+            }
+            Token::Real(s)
+        });
 
     // A parser for numbers
-    let int = text::int(10).map(|s: String| Token::Int(s.parse().unwrap()));
+    let int = text::int(10).validate(|s: String, span, emit| {
+        let par = s.parse::<i64>();
+        match par {
+            Ok(n) => Token::Int(n),
+            Err(err) => {
+                emit(Simple::custom(span, format!("Number parse error {}", err)));
+                Token::Int(0)
+            }
+        }
+    });
 
     let escape = just('\\').ignore_then(
         just('\\')
@@ -107,6 +129,16 @@ fn lexer() -> impl Parser<char, Vec<(Token, Span)>, Error = Simple<char>> {
         just('<').to(Op::Less),
         just(">=").to(Op::MoreEq),
         just('>').to(Op::More),
+        // Bit/Logic
+        just("&&").to(Op::AndAnd),
+        just('&').to(Op::And),
+        just("||").to(Op::BarBar),
+        just('|').to(Op::Bar),
+        just('^').to(Op::Hat),
+        just('~').to(Op::Tilda),
+        just('!').to(Op::Not),
+        just("<<").to(Op::DoubleLeft),
+        just(">>").to(Op::DoubleRight),
         // Mutate
         just('=').to(Op::Eq),
         just("+=").to(Op::PlusEq),
@@ -117,7 +149,6 @@ fn lexer() -> impl Parser<char, Vec<(Token, Span)>, Error = Simple<char>> {
         just("<-").to(Op::LArrow),
         just("->").to(Op::RArrow),
         // Special
-        just('!').to(Op::Not),
         just('.').to(Op::Dot),
         just("..").to(Op::Ellipsis),
         // 2nd order
@@ -151,7 +182,6 @@ fn lexer() -> impl Parser<char, Vec<(Token, Span)>, Error = Simple<char>> {
         "import" => Token::Import,
         "shader" => Token::Shader,
         "struct" => Token::Struct,
-        "main" => Token::Main,
         "pub" => Token::Pub,
         "impl" => Token::Impl,
 
@@ -319,7 +349,21 @@ fn block_parser() -> impl Parser<Token, Vec<ast::Root>, Error = Simple<Token>> +
                 Token::Null => Value::Null,
                 Token::Bool(x) => Value::Bool(x),
                 Token::Int(x) => Value::Int(x),
-                Token::Real(n) => Value::Real(n.parse().unwrap()),
+                Token::Real(n) => {
+                    let has_exponent = n.chars().any(|c| c == 'e' || c == 'E');
+                    let lower = n.to_lowercase();
+                    let split = lower.split('e').collect::<Vec<_>>();
+                    let (mantissa, exponent) = if split.len() == 2 {
+                        (split[0], split[1])
+                    } else {
+                        (n.as_str(), "0")
+                    };
+
+                    let mantissa = mantissa.parse::<f64>().unwrap();
+                    let exponent = exponent.parse::<i32>().unwrap();
+
+                    Value::Real(mantissa * 10f64.powi(exponent))
+                },
                 Token::Str(s) => Value::Str(s),
             }
             .labelled("value");
@@ -412,15 +456,35 @@ fn block_parser() -> impl Parser<Token, Vec<ast::Root>, Error = Simple<Token>> +
                     |span| ast::Expression::Error(((), span)),
                 ));
 
+            let unary_pre = just(Token::Op(Op::Sub))
+                .to(Op::Sub)
+                .or(just(Token::Op(Op::SubSub)).to(Op::SubSub))
+                .or(just(Token::Op(Op::Join)).to(Op::Join))
+                .or(just(Token::Op(Op::Not)).to(Op::Not))
+                .then(atom.clone())
+                .map_with_span(|(op, expr), span| {
+                    ast::Expression::Op((
+                        Box::new(ast::Expression::Error(((), span.clone()))),
+                        op,
+                        Box::new(expr),
+                        span,
+                    ))
+                });
+
             let op = just(Token::Op(Op::Dot)).to(Op::Dot);
-            let dot = atom
+            let dot = unary_pre
                 .clone()
                 .then(
                     op.clone()
-                        .then(atom.clone().or_not().map_with_span(|val, span| match val {
-                            Some(val) => val,
-                            None => ast::Expression::Error(((), span)),
-                        }))
+                        .then(
+                            unary_pre
+                                .clone()
+                                .or_not()
+                                .map_with_span(|val, span| match val {
+                                    Some(val) => val,
+                                    None => ast::Expression::Error(((), span)),
+                                }),
+                        )
                         .repeated(),
                 )
                 .foldl(|a, (op, b)| {
@@ -442,10 +506,18 @@ fn block_parser() -> impl Parser<Token, Vec<ast::Root>, Error = Simple<Token>> +
                 )
                 .foldl(|f, args| {
                     let span = f.get_span().start..args.1.end;
+                    let ident_extract = match f {
+                        ast::Expression::Identifier((id, _)) => id,
+                        _ => unreachable!(),
+                    };
                     ast::Expression::Call((
                         ast::Call {
                             args: args.0,
-                            expression: Box::new(f),
+                            expression: Box::new(ast::Expression::Error((
+                                (),
+                                ident_extract.span.clone(),
+                            ))),
+                            method: Some(ident_extract),
                             span: span.clone(),
                         },
                         span,
@@ -455,24 +527,27 @@ fn block_parser() -> impl Parser<Token, Vec<ast::Root>, Error = Simple<Token>> +
             let op = just(Token::Op(Op::Dot)).to(Op::Dot);
             let call_dot_chain = call
                 .clone()
+                .or(unary_pre.clone())
                 .or(atom.clone())
                 .then(
                     op.clone()
-                        .then(ident_expr.clone().or(call.clone()))
+                        .then(call.clone().or(ident_expr.clone()).or_not().map_with_span(
+                            |val, span| match val {
+                                Some(val) => val,
+                                None => ast::Expression::Error(((), span)),
+                            },
+                        ))
                         .repeated(),
                 )
                 .foldl(|a, (op, b)| {
                     let span = a.get_span().start..b.get_span().end;
+
                     match b {
                         ast::Expression::Call(call) => ast::Expression::Call((
                             ast::Call {
                                 args: call.0.args,
-                                expression: Box::new(ast::Expression::Op((
-                                    Box::new(a),
-                                    Op::Dot,
-                                    call.0.expression,
-                                    span,
-                                ))),
+                                expression: Box::new(a),
+                                method: call.0.method,
                                 span: call.1.clone(),
                             },
                             call.1,

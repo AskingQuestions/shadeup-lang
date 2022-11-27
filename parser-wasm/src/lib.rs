@@ -3,7 +3,12 @@ use js_sys::Array;
 
 use wasm_bindgen::prelude::*;
 
-use parser::{self, environment, graph::SymbolDefinition};
+use serde::{Deserialize, Serialize};
+
+use parser::{
+    self, ast, environment,
+    graph::{self, SymbolDefinition, SymbolNode},
+};
 extern crate console_error_panic_hook;
 use std::panic;
 
@@ -114,6 +119,37 @@ pub fn get_symbols(e: &mut environment::Environment) -> Array {
     });
 
     symbols
+}
+
+#[derive(Serialize, Deserialize)]
+struct NativeFunctionSymbol {
+    pub name: String,
+    pub parameters: Vec<(String, String, bool)>,
+    pub return_type: String,
+    pub js: String,
+}
+#[wasm_bindgen]
+pub fn add_native_function(e: &mut environment::Environment, val: JsValue) {
+    let sym: NativeFunctionSymbol = serde_wasm_bindgen::from_value(val).unwrap();
+
+    let node = SymbolNode {
+        aliased: false,
+        imported: false,
+        file: "external".to_string(),
+        name: sym.name.clone(),
+        real_name: sym.name.clone(),
+        span: 0..0,
+        definition: SymbolDefinition::Function(graph::SymbolFunction {
+            javascript: Some(sym.js),
+            return_type: Some(sym.return_type),
+            parameters: sym.parameters.clone(),
+            span: 0..0,
+            tags: vec![],
+        }),
+        root: ast::Root::Error,
+    };
+
+    e.add_native_symbol(node);
 }
 
 #[derive(Clone)]

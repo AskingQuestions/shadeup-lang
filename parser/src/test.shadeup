@@ -1,0 +1,16 @@
+struct t {
+  x: int
+}
+
+impl t {
+  fn test(a: int) -> t {}
+}
+
+fn test() -> t {
+  let x = t;
+  return x;
+}
+
+fn main() -> float {
+  return 1.2451e25;
+}

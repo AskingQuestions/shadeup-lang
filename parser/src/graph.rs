@@ -107,6 +107,10 @@ impl SymbolGraph {
         }
     }
 
+    pub fn add_primitive_symbol(&mut self, symbol: SymbolNode) {
+        self.primitive.insert(symbol.name.clone(), symbol);
+    }
+
     pub fn add_primitive_symbols(&mut self) {
         macro_rules! add_primitive {
             ($name:expr, $methods:expr) => {
@@ -156,175 +160,297 @@ impl SymbolGraph {
 
         macro_rules! add_scalar {
             ($name:expr, $mask:expr) => {
+                let base_integer_methods = |type_name: String| {
+                    if type_name == "uint" || type_name == "int" || type_name == "short" {
+                        vec![
+                            (
+                                "__operator_bar".to_string(),
+                                SymbolFunction {
+                                    span: 0..0,
+                                    parameters: vec![
+                                        ("__this".to_owned(), type_name.clone(), false),
+                                        ("other".to_owned(), type_name.clone(), false),
+                                    ],
+                                    return_type: Some(type_name.clone()),
+                                    javascript: Some(format!("return (__this | other){};", $mask)),
+                                    tags: Vec::new(),
+                                },
+                            ),
+                            (
+                                "__operator_and".to_string(),
+                                SymbolFunction {
+                                    span: 0..0,
+                                    parameters: vec![
+                                        ("__this".to_owned(), type_name.clone(), false),
+                                        ("other".to_owned(), type_name.clone(), false),
+                                    ],
+                                    return_type: Some(type_name.clone()),
+                                    javascript: Some(format!("return (__this & other){};", $mask)),
+                                    tags: Vec::new(),
+                                },
+                            ),
+                            (
+                                "__operator_double_right".to_string(),
+                                SymbolFunction {
+                                    span: 0..0,
+                                    parameters: vec![
+                                        ("__this".to_owned(), type_name.clone(), false),
+                                        ("other".to_owned(), type_name.clone(), false),
+                                    ],
+                                    return_type: Some(type_name.clone()),
+                                    javascript: Some(format!("return (__this >> other){};", $mask)),
+                                    tags: Vec::new(),
+                                },
+                            ),
+                            (
+                                "__operator_double_left".to_string(),
+                                SymbolFunction {
+                                    span: 0..0,
+                                    parameters: vec![
+                                        ("__this".to_owned(), type_name.clone(), false),
+                                        ("other".to_owned(), type_name.clone(), false),
+                                    ],
+                                    return_type: Some(type_name.clone()),
+                                    javascript: Some(format!("return (__this << other){};", $mask)),
+                                    tags: Vec::new(),
+                                },
+                            ),
+                            (
+                                "__operator_hat".to_string(),
+                                SymbolFunction {
+                                    span: 0..0,
+                                    parameters: vec![
+                                        ("__this".to_owned(), type_name.clone(), false),
+                                        ("other".to_owned(), type_name.clone(), false),
+                                    ],
+                                    return_type: Some(type_name.clone()),
+                                    javascript: Some(format!("return (__this ^ other){};", $mask)),
+                                    tags: Vec::new(),
+                                },
+                            ),
+                            (
+                                "__prefix_operator_tilda".to_string(),
+                                SymbolFunction {
+                                    span: 0..0,
+                                    parameters: vec![(
+                                        "__this".to_owned(),
+                                        type_name.clone(),
+                                        false,
+                                    )],
+                                    return_type: Some(type_name.clone()),
+                                    javascript: Some(format!("return (~__this){};", $mask)),
+                                    tags: Vec::new(),
+                                },
+                            ),
+                        ]
+                    } else {
+                        vec![]
+                    }
+                };
                 let base_scalar_methods = |type_name: String| {
-                    vec![
-                        (
-                            "__operator_plus".to_string(),
-                            SymbolFunction {
-                                span: 0..0,
-                                parameters: vec![
-                                    ("__this".to_owned(), type_name.clone(), false),
-                                    ("other".to_owned(), type_name.clone(), false),
-                                ],
-                                return_type: Some(type_name.clone()),
-                                javascript: Some(format!("return (__this + other){};", $mask)),
-                                tags: Vec::new(),
-                            },
-                        ),
-                        (
-                            "__operator_minus".to_string(),
-                            SymbolFunction {
-                                span: 0..0,
-                                parameters: vec![
-                                    ("__this".to_owned(), type_name.clone(), false),
-                                    ("other".to_owned(), type_name.clone(), false),
-                                ],
-                                return_type: Some(type_name.clone()),
-                                javascript: Some(format!("return (__this - other){};", $mask)),
-                                tags: Vec::new(),
-                            },
-                        ),
-                        (
-                            "__operator_divide".to_string(),
-                            SymbolFunction {
-                                span: 0..0,
-                                parameters: vec![
-                                    ("__this".to_owned(), type_name.clone(), false),
-                                    ("other".to_owned(), type_name.clone(), false),
-                                ],
-                                return_type: Some(type_name.clone()),
-                                javascript: Some(format!("return (__this / other){};", $mask)),
-                                tags: Vec::new(),
-                            },
-                        ),
-                        (
-                            "__operator_multiply".to_string(),
-                            SymbolFunction {
-                                span: 0..0,
-                                parameters: vec![
-                                    ("__this".to_owned(), type_name.clone(), false),
-                                    ("other".to_owned(), type_name.clone(), false),
-                                ],
-                                return_type: Some(type_name.clone()),
-                                javascript: Some(format!("return (__this * other){};", $mask)),
-                                tags: Vec::new(),
-                            },
-                        ),
-                        (
-                            "__operator_modulo".to_string(),
-                            SymbolFunction {
-                                span: 0..0,
-                                parameters: vec![
-                                    ("__this".to_owned(), type_name.clone(), false),
-                                    ("other".to_owned(), type_name.clone(), false),
-                                ],
-                                return_type: Some(type_name.clone()),
-                                javascript: Some(format!("return (__this % other){};", $mask)),
-                                tags: Vec::new(),
-                            },
-                        ),
-                        (
-                            "__operator_equals".to_string(),
-                            SymbolFunction {
-                                span: 0..0,
-                                parameters: vec![
-                                    ("__this".to_owned(), type_name.clone(), false),
-                                    ("other".to_owned(), type_name.clone(), false),
-                                ],
-                                return_type: Some("bool".to_string()),
-                                javascript: Some("return __this === other;".to_string()),
-                                tags: Vec::new(),
-                            },
-                        ),
-                        (
-                            "__operator_not_equals".to_string(),
-                            SymbolFunction {
-                                span: 0..0,
-                                parameters: vec![
-                                    ("__this".to_owned(), type_name.clone(), false),
-                                    ("other".to_owned(), type_name.clone(), false),
-                                ],
-                                return_type: Some("bool".to_string()),
-                                javascript: Some("return __this !== other;".to_string()),
-                                tags: Vec::new(),
-                            },
-                        ),
-                        (
-                            "__operator_less_than".to_string(),
-                            SymbolFunction {
-                                span: 0..0,
-                                parameters: vec![
-                                    ("__this".to_owned(), type_name.clone(), false),
-                                    ("other".to_owned(), type_name.clone(), false),
-                                ],
-                                return_type: Some("bool".to_string()),
-                                javascript: Some("return __this < other;".to_string()),
-                                tags: Vec::new(),
-                            },
-                        ),
-                        (
-                            "__operator_greater_than".to_string(),
-                            SymbolFunction {
-                                span: 0..0,
-                                parameters: vec![
-                                    ("__this".to_owned(), type_name.clone(), false),
-                                    ("other".to_owned(), type_name.clone(), false),
-                                ],
-                                return_type: Some("bool".to_string()),
-                                javascript: Some("return __this > other;".to_string()),
-                                tags: Vec::new(),
-                            },
-                        ),
-                        (
-                            "__operator_less_than_or_equals".to_string(),
-                            SymbolFunction {
-                                span: 0..0,
-                                parameters: vec![
-                                    ("__this".to_owned(), type_name.clone(), false),
-                                    ("other".to_owned(), type_name.clone(), false),
-                                ],
-                                return_type: Some("bool".to_string()),
-                                javascript: Some("return __this <= other;".to_string()),
-                                tags: Vec::new(),
-                            },
-                        ),
-                        (
-                            "__operator_greater_than_or_equals".to_string(),
-                            SymbolFunction {
-                                span: 0..0,
-                                parameters: vec![
-                                    ("__this".to_owned(), type_name.clone(), false),
-                                    ("other".to_owned(), type_name.clone(), false),
-                                ],
-                                return_type: Some("bool".to_string()),
-                                javascript: Some("return __this >= other;".to_string()),
-                                tags: Vec::new(),
-                            },
-                        ),
-                        (
-                            "__is_scalar".to_string(),
-                            SymbolFunction {
-                                span: 0..0,
-                                parameters: vec![
-                                    ("__this".to_owned(), type_name.clone(), false),
-                                    ("other".to_owned(), type_name.clone(), false),
-                                ],
-                                return_type: Some("bool".to_string()),
-                                javascript: None,
-                                tags: Vec::new(),
-                            },
-                        ),
-                        (
-                            "__cast_from_scalar".to_string(),
-                            SymbolFunction {
-                                span: 0..0,
-                                parameters: vec![("other".to_owned(), type_name.clone(), false)],
-                                return_type: Some(type_name.clone()),
-                                javascript: Some(format!("return other{};", $mask)),
-                                tags: Vec::new(),
-                            },
-                        ),
+                    [
+                        base_integer_methods(type_name.clone()),
+                        vec![
+                            (
+                                "__operator_plus".to_string(),
+                                SymbolFunction {
+                                    span: 0..0,
+                                    parameters: vec![
+                                        ("__this".to_owned(), type_name.clone(), false),
+                                        ("other".to_owned(), type_name.clone(), false),
+                                    ],
+                                    return_type: Some(type_name.clone()),
+                                    javascript: Some(format!("return (__this + other){};", $mask)),
+                                    tags: Vec::new(),
+                                },
+                            ),
+                            (
+                                "__operator_minus".to_string(),
+                                SymbolFunction {
+                                    span: 0..0,
+                                    parameters: vec![
+                                        ("__this".to_owned(), type_name.clone(), false),
+                                        ("other".to_owned(), type_name.clone(), false),
+                                    ],
+                                    return_type: Some(type_name.clone()),
+                                    javascript: Some(format!("return (__this - other){};", $mask)),
+                                    tags: Vec::new(),
+                                },
+                            ),
+                            (
+                                "__operator_divide".to_string(),
+                                SymbolFunction {
+                                    span: 0..0,
+                                    parameters: vec![
+                                        ("__this".to_owned(), type_name.clone(), false),
+                                        ("other".to_owned(), type_name.clone(), false),
+                                    ],
+                                    return_type: Some(type_name.clone()),
+                                    javascript: Some(format!("return (__this / other){};", $mask)),
+                                    tags: Vec::new(),
+                                },
+                            ),
+                            (
+                                "__operator_multiply".to_string(),
+                                SymbolFunction {
+                                    span: 0..0,
+                                    parameters: vec![
+                                        ("__this".to_owned(), type_name.clone(), false),
+                                        ("other".to_owned(), type_name.clone(), false),
+                                    ],
+                                    return_type: Some(type_name.clone()),
+                                    javascript: Some(format!("return (__this * other){};", $mask)),
+                                    tags: Vec::new(),
+                                },
+                            ),
+                            (
+                                "__operator_double_multiply".to_string(),
+                                SymbolFunction {
+                                    span: 0..0,
+                                    parameters: vec![
+                                        ("__this".to_owned(), type_name.clone(), false),
+                                        ("other".to_owned(), type_name.clone(), false),
+                                    ],
+                                    return_type: Some(type_name.clone()),
+                                    javascript: Some(format!("return (__this ** other){};", $mask)),
+                                    tags: Vec::new(),
+                                },
+                            ),
+                            (
+                                "__operator_modulo".to_string(),
+                                SymbolFunction {
+                                    span: 0..0,
+                                    parameters: vec![
+                                        ("__this".to_owned(), type_name.clone(), false),
+                                        ("other".to_owned(), type_name.clone(), false),
+                                    ],
+                                    return_type: Some(type_name.clone()),
+                                    javascript: Some(format!("return (__this % other){};", $mask)),
+                                    tags: Vec::new(),
+                                },
+                            ),
+                            (
+                                "__operator_equals".to_string(),
+                                SymbolFunction {
+                                    span: 0..0,
+                                    parameters: vec![
+                                        ("__this".to_owned(), type_name.clone(), false),
+                                        ("other".to_owned(), type_name.clone(), false),
+                                    ],
+                                    return_type: Some("bool".to_string()),
+                                    javascript: Some("return __this === other;".to_string()),
+                                    tags: Vec::new(),
+                                },
+                            ),
+                            (
+                                "__operator_not_equals".to_string(),
+                                SymbolFunction {
+                                    span: 0..0,
+                                    parameters: vec![
+                                        ("__this".to_owned(), type_name.clone(), false),
+                                        ("other".to_owned(), type_name.clone(), false),
+                                    ],
+                                    return_type: Some("bool".to_string()),
+                                    javascript: Some("return __this !== other;".to_string()),
+                                    tags: Vec::new(),
+                                },
+                            ),
+                            (
+                                "__operator_less_than".to_string(),
+                                SymbolFunction {
+                                    span: 0..0,
+                                    parameters: vec![
+                                        ("__this".to_owned(), type_name.clone(), false),
+                                        ("other".to_owned(), type_name.clone(), false),
+                                    ],
+                                    return_type: Some("bool".to_string()),
+                                    javascript: Some("return __this < other;".to_string()),
+                                    tags: Vec::new(),
+                                },
+                            ),
+                            (
+                                "__operator_greater_than".to_string(),
+                                SymbolFunction {
+                                    span: 0..0,
+                                    parameters: vec![
+                                        ("__this".to_owned(), type_name.clone(), false),
+                                        ("other".to_owned(), type_name.clone(), false),
+                                    ],
+                                    return_type: Some("bool".to_string()),
+                                    javascript: Some("return __this > other;".to_string()),
+                                    tags: Vec::new(),
+                                },
+                            ),
+                            (
+                                "__operator_less_than_or_equals".to_string(),
+                                SymbolFunction {
+                                    span: 0..0,
+                                    parameters: vec![
+                                        ("__this".to_owned(), type_name.clone(), false),
+                                        ("other".to_owned(), type_name.clone(), false),
+                                    ],
+                                    return_type: Some("bool".to_string()),
+                                    javascript: Some("return __this <= other;".to_string()),
+                                    tags: Vec::new(),
+                                },
+                            ),
+                            (
+                                "__operator_greater_than_or_equals".to_string(),
+                                SymbolFunction {
+                                    span: 0..0,
+                                    parameters: vec![
+                                        ("__this".to_owned(), type_name.clone(), false),
+                                        ("other".to_owned(), type_name.clone(), false),
+                                    ],
+                                    return_type: Some("bool".to_string()),
+                                    javascript: Some("return __this >= other;".to_string()),
+                                    tags: Vec::new(),
+                                },
+                            ),
+                            (
+                                "__prefix_operator_minus".to_string(),
+                                SymbolFunction {
+                                    span: 0..0,
+                                    parameters: vec![(
+                                        "__this".to_owned(),
+                                        type_name.clone(),
+                                        false,
+                                    )],
+                                    return_type: Some(type_name.clone()),
+                                    javascript: Some(format!("return (-__this){};", $mask)),
+                                    tags: Vec::new(),
+                                },
+                            ),
+                            (
+                                "__is_scalar".to_string(),
+                                SymbolFunction {
+                                    span: 0..0,
+                                    parameters: vec![
+                                        ("__this".to_owned(), type_name.clone(), false),
+                                        ("other".to_owned(), type_name.clone(), false),
+                                    ],
+                                    return_type: Some("bool".to_string()),
+                                    javascript: None,
+                                    tags: Vec::new(),
+                                },
+                            ),
+                            (
+                                "__cast_from_scalar".to_string(),
+                                SymbolFunction {
+                                    span: 0..0,
+                                    parameters: vec![(
+                                        "other".to_owned(),
+                                        type_name.clone(),
+                                        false,
+                                    )],
+                                    return_type: Some(type_name.clone()),
+                                    javascript: Some(format!("return other{};", $mask)),
+                                    tags: Vec::new(),
+                                },
+                            ),
+                        ],
                     ]
+                    .concat();
                 };
                 let mutlti_scalar_methods = |type_name: String,
                                              single_name: String,
@@ -335,6 +461,15 @@ impl SymbolGraph {
                             "return [{}]",
                             (0..num_fields)
                                 .map(|i| format!("(__this[{}] {} other[{}]){}", i, op, i, mask))
+                                .collect::<Vec<String>>()
+                                .join(", ")
+                        )
+                    };
+                    let gen_unary_op_on_fields = |op: &str| {
+                        format!(
+                            "return [{}]",
+                            (0..num_fields)
+                                .map(|i| format!("({}__this[{}]){}", op, i, mask))
                                 .collect::<Vec<String>>()
                                 .join(", ")
                         )
@@ -406,6 +541,19 @@ impl SymbolGraph {
                             },
                         ),
                         (
+                            "__operator_double_multiply".to_string(),
+                            SymbolFunction {
+                                span: 0..0,
+                                parameters: vec![
+                                    ("__this".to_owned(), type_name.clone(), false),
+                                    ("other".to_owned(), type_name.clone(), false),
+                                ],
+                                return_type: Some(type_name.clone()),
+                                javascript: Some(gen_op_on_fields("**")),
+                                tags: Vec::new(),
+                            },
+                        ),
+                        (
                             "__operator_modulo".to_string(),
                             SymbolFunction {
                                 span: 0..0,
@@ -415,6 +563,16 @@ impl SymbolGraph {
                                 ],
                                 return_type: Some(type_name.clone()),
                                 javascript: Some(gen_op_on_fields("%")),
+                                tags: Vec::new(),
+                            },
+                        ),
+                        (
+                            "__prefix_operator_minus".to_string(),
+                            SymbolFunction {
+                                span: 0..0,
+                                parameters: vec![("__this".to_owned(), type_name.clone(), false)],
+                                return_type: Some(type_name.clone()),
+                                javascript: Some(gen_unary_op_on_fields("-")),
                                 tags: Vec::new(),
                             },
                         ),
@@ -475,8 +633,63 @@ impl SymbolGraph {
         add_scalar!("float", "");
         add_scalar!("double", "");
 
-        add_primitive!("bool", Vec::new());
-        add_primitive!("string", Vec::new());
+        add_primitive!(
+            "bool",
+            vec![
+                (
+                    "__prefix_operator_not".to_string(),
+                    SymbolFunction {
+                        span: 0..0,
+                        parameters: vec![("__this".to_owned(), "bool".to_string(), false),],
+                        return_type: Some("bool".to_string()),
+                        javascript: Some(format!("return !__this;")),
+                        tags: Vec::new(),
+                    },
+                ),
+                (
+                    "__operator_and_and".to_string(),
+                    SymbolFunction {
+                        span: 0..0,
+                        parameters: vec![
+                            ("__this".to_owned(), "bool".to_string(), false),
+                            ("other".to_owned(), "bool".to_string(), false),
+                        ],
+                        return_type: Some("bool".to_string()),
+                        javascript: Some("return __this && other;".to_string()),
+                        tags: Vec::new(),
+                    },
+                ),
+                (
+                    "__operator_bar_bar".to_string(),
+                    SymbolFunction {
+                        span: 0..0,
+                        parameters: vec![
+                            ("__this".to_owned(), "bool".to_string(), false),
+                            ("other".to_owned(), "bool".to_string(), false),
+                        ],
+                        return_type: Some("bool".to_string()),
+                        javascript: Some("return __this || other;".to_string()),
+                        tags: Vec::new(),
+                    },
+                ),
+            ]
+        );
+        add_primitive!(
+            "string",
+            vec![(
+                "__operator_plus".to_string(),
+                SymbolFunction {
+                    span: 0..0,
+                    parameters: vec![
+                        ("__this".to_owned(), "string".to_string(), false),
+                        ("other".to_owned(), "string".to_string(), false),
+                    ],
+                    return_type: Some("string".to_string()),
+                    javascript: Some(format!("return __this + other;")),
+                    tags: Vec::new(),
+                },
+            )]
+        );
         add_primitive!("byte", Vec::new());
         add_primitive!("array", Vec::new());
         add_primitive!("map", Vec::new());
@@ -485,6 +698,7 @@ impl SymbolGraph {
         add_primitive!("texture3d", Vec::new());
         add_primitive!("shader", Vec::new());
         add_primitive!("void", Vec::new());
+        add_primitive!("any", Vec::new());
     }
 
     pub fn update_file_first_pass(

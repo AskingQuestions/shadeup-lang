@@ -201,6 +201,7 @@ impl Expression {
 #[derive(Clone, Debug)]
 pub struct Call {
     pub expression: Box<Expression>,
+    pub method: Option<Identifier>,
     pub args: Vec<Expression>,
     pub span: Span,
 }
@@ -231,6 +232,14 @@ pub enum Op {
     MinusEq,
     Question,
     Sq,
+    AndAnd,
+    And,
+    Bar,
+    BarBar,
+    Hat,
+    DoubleRight,
+    DoubleLeft,
+    Tilda,
 }
 
 impl fmt::Display for Op {
@@ -260,6 +269,14 @@ impl fmt::Display for Op {
             Op::SubSub => write!(f, "--"),
             Op::Sq => write!(f, "**"),
             Op::Question => write!(f, "?"),
+            Op::AndAnd => write!(f, "&&"),
+            Op::And => write!(f, "&"),
+            Op::Bar => write!(f, "|"),
+            Op::BarBar => write!(f, "||"),
+            Op::Hat => write!(f, "^"),
+            Op::DoubleRight => write!(f, ">>"),
+            Op::DoubleLeft => write!(f, "<<"),
+            Op::Tilda => write!(f, "~"),
         }
     }
 }
@@ -291,6 +308,14 @@ impl Op {
             Op::MinusEq => "minus_equals".to_string(),
             Op::Sq => "double_multiply".to_string(),
             Op::Question => "question".to_string(),
+            Op::AndAnd => "and_and".to_string(),
+            Op::And => "and".to_string(),
+            Op::Bar => "bar".to_string(),
+            Op::BarBar => "bar_bar".to_string(),
+            Op::Hat => "hat".to_string(),
+            Op::DoubleRight => "double_right".to_string(),
+            Op::DoubleLeft => "double_left".to_string(),
+            Op::Tilda => "tilda".to_string(),
         }
     }
 }

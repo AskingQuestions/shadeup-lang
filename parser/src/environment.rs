@@ -7,7 +7,7 @@ use crate::printer::AlertLevel;
 use std::io::{BufWriter, Write};
 
 use crate::ast::{self, Span, USizeTuple};
-use crate::graph::SymbolDefinition;
+use crate::graph::{SymbolDefinition, SymbolNode};
 use crate::printer::SpannedAlert;
 use crate::validator::{ExpandedType, TypedBody, TypedFunction, TypedFunctionParameter};
 
@@ -99,6 +99,10 @@ impl Environment {
 
     pub fn get_intellisense(&self, name: &str) -> Vec<IntellisenseHint> {
         self.files[name].intellisense.clone()
+    }
+
+    pub fn add_native_symbol(&mut self, symbol: SymbolNode) {
+        self.graph.add_primitive_symbol(symbol);
     }
 
     pub fn set_file(&mut self, name: String, source: String) {
@@ -379,7 +383,7 @@ impl Environment {
             crate::validator::tag_function(&mut typed, &k);
         }
 
-        let entry = "frame".to_string();
+        let entry = "main".to_string();
         let real_entry = format!("{}_{}", name.replace(".", "__"), entry);
 
         if let Some(_func) = typed.functions.get(&real_entry) {

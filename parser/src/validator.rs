@@ -241,7 +241,16 @@ fn shake_body(
 ) {
     for statement in &typed_body.statements {
         match statement {
-            TypedStatement::Return(_, _span) => {}
+            TypedStatement::Return(expr, _span) => {
+                shake_expression(
+                    graph,
+                    new_scope,
+                    file_name,
+                    in_intermediate,
+                    out_intermediate,
+                    expr,
+                );
+            }
             TypedStatement::If {
                 condition,
                 body,
@@ -573,6 +582,16 @@ fn check_method_local<'a>(
             ),
             Location::new(file_name.to_string(), USizeTuple(span.start, span.end)),
         ));
+    } else if method_name.starts_with("__prefix_operator_") {
+        _context.alerts.push(SpannedAlert::error(
+            "Undefined unary operator".to_string(),
+            format!(
+                "No operator '{}' was found for type '{}'",
+                method_name.replace("__prefix_operator_", ""),
+                args[0].name
+            ),
+            Location::new(file_name.to_string(), USizeTuple(span.start, span.end)),
+        ));
     } else {
         _context.alerts.push(SpannedAlert::error(
             "Undefined method".to_string(),
@@ -637,6 +656,49 @@ pub fn add_struct_hints(ctx: &mut ValidationContext, symbol: &SymbolType, span: 
     });
 }
 
+pub fn match_method<'a>(
+    _context: &mut ValidationContext,
+    scope: &Scope,
+    graph: &'a SymbolGraph,
+    file_name: &str,
+    intermediate: &mut TypedIntermediate,
+    symbol: &'a SymbolType,
+    method_name: &str,
+    args: &Vec<ExpandedType>,
+) -> Option<&'a SymbolFunction> {
+    for method in &symbol.methods {
+        if method.0 == method_name {
+            let mut compatible = true;
+            if args.len() > method.1.parameters.len() {
+                compatible = false;
+            }
+
+            for (i, param) in method.1.parameters.iter().enumerate() {
+                if i >= args.len() {
+                    if param.2 {
+                        continue;
+                    } else {
+                        compatible = false;
+                        break;
+                    }
+                }
+
+                let arg = &args[i];
+                let param_type = ExpandedType::from_string(graph, file_name, param.1.as_str());
+                if !arg.is_compatible_with(&param_type) {
+                    compatible = false;
+                }
+            }
+
+            if compatible {
+                return Some(&method.1);
+            }
+        }
+    }
+
+    None
+}
+
 pub fn get_call_local(
     _context: &mut ValidationContext,
     scope: &Scope,
@@ -644,6 +706,7 @@ pub fn get_call_local(
     file_name: &str,
     intermediate: &mut TypedIntermediate,
     call: &Call,
+    func_symbol: Option<&SymbolNode>,
     func_type: &ExpandedType,
     typed_expr: &TypedExpression,
 ) -> (String, TypedExpression) {
@@ -736,15 +799,93 @@ pub fn get_call_local(
             TypedExpression::Call(func_name, typed_args, call.span.clone()),
         )
     } else {
-        _context.alerts.push(SpannedAlert::error(
-            "Expected something callable".to_string(),
-            format!("got: '{}'", func_type.name),
-            Location::new(
-                file_name.to_string(),
-                USizeTuple(call.span.start, call.span.end),
-            ),
-        ));
-        ("!error".to_string(), TypedExpression::Error())
+        if call.method.is_some() {
+            if func_type.symbol_type.is_some() {
+                let symbol = func_type.symbol_type.as_ref().unwrap();
+                let method_name = call.method.as_ref().unwrap();
+                let mut args = Vec::new();
+
+                let (self_arg_type_string, self_typed) = get_type_local(
+                    _context,
+                    scope,
+                    graph,
+                    file_name,
+                    intermediate,
+                    &call.expression,
+                );
+
+                typed_args.push(self_typed);
+
+                for arg in &call.args {
+                    let (arg_type_string, typed_arg) =
+                        get_type_local(_context, scope, graph, file_name, intermediate, &arg);
+                    let arg_type = ExpandedType::from_string(graph, file_name, &arg_type_string);
+                    typed_args.push(arg_type.wrap_cast(&arg_type, typed_arg));
+                    args.push(arg_type);
+                }
+
+                if let Some(method_symbol) = match_method(
+                    _context,
+                    scope,
+                    graph,
+                    file_name,
+                    intermediate,
+                    symbol,
+                    &method_name.name,
+                    &args,
+                ) {
+                    (
+                        method_symbol
+                            .return_type
+                            .as_ref()
+                            .unwrap_or(&"void".to_string())
+                            .clone(),
+                        TypedExpression::Call(
+                            format!(
+                                "__{}_{}",
+                                func_symbol.unwrap().get_namespaced(),
+                                method_name.name
+                            ),
+                            typed_args,
+                            call.span.clone(),
+                        ),
+                    )
+                } else {
+                    _context.alerts.push(SpannedAlert::error(
+                        "No method".to_string(),
+                        format!(
+                            "'{}' has no method named '{}'",
+                            func_type.name, method_name.name
+                        ),
+                        Location::new(
+                            file_name.to_string(),
+                            USizeTuple(call.span.start, call.span.end),
+                        ),
+                    ));
+                    ("!error".to_string(), TypedExpression::Error())
+                }
+            } else {
+                _context.alerts.push(SpannedAlert::error(
+                    "No methods".to_string(),
+                    format!("'{}' has no methods", func_type.name),
+                    Location::new(
+                        file_name.to_string(),
+                        USizeTuple(call.span.start, call.span.end),
+                    ),
+                ));
+                ("!error".to_string(), TypedExpression::Error())
+            }
+        } else {
+            _context.alerts.push(SpannedAlert::error(
+                "Expected something callable".to_string(),
+                format!("got: '{}'", func_type.name),
+                Location::new(
+                    file_name.to_string(),
+                    USizeTuple(call.span.start, call.span.end),
+                ),
+            ));
+            ("!error".to_string(), TypedExpression::Error())
+        }
     }
 }
 
@@ -845,28 +986,50 @@ pub fn get_type_local(
             }
         }
         ast::Expression::Call((call, _)) => {
+            let matched_expr = match *call.expression {
+                ast::Expression::Error(_) => {
+                    let method_unwrap = call.method.as_ref().unwrap();
+                    ast::Expression::Identifier((method_unwrap.clone(), method_unwrap.span.clone()))
+                }
+                _ => *call.expression.clone(),
+            };
             let (func_type, typed_expr) = get_type_local(
                 _context,
                 scope,
                 graph,
                 file_name,
                 intermediate,
-                &call.expression,
+                &matched_expr,
             );
-
+            let func_symbol = graph.get_symbol_node_in_file(file_name, &func_type);
             let func_type = ExpandedType::from_string(graph, file_name, &func_type);
-
-            get_call_local(
-                _context,
-                scope,
-                graph,
-                file_name,
-                intermediate,
-                call,
-                &func_type,
-                &typed_expr,
-            )
+            if let Some(func_symbol) = func_symbol {
+                get_call_local(
+                    _context,
+                    scope,
+                    graph,
+                    file_name,
+                    intermediate,
+                    call,
+                    Some(&func_symbol),
+                    &func_type,
+                    &typed_expr,
+                )
+            } else {
+                get_call_local(
+                    _context,
+                    scope,
+                    graph,
+                    file_name,
+                    intermediate,
+                    call,
+                    None,
+                    &func_type,
+                    &typed_expr,
+                )
+            }
         }
+
         ast::Expression::InlineBlock((block, _)) => {
             let output = ExpandedType::from_string(graph, file_name, "shader");
 
@@ -966,15 +1129,19 @@ pub fn get_type_local(
 
             let lhs_type = ExpandedType::from_string(graph, file_name, &lhs_type);
 
-            let lhs_symbol = check_type_local(
-                _context,
-                graph,
-                file_name,
-                &ast::Identifier {
-                    name: lhs_type.name.clone(),
-                    span: lhs.get_span(),
-                },
-            );
+            let lhs_symbol = if lhs_type.name == "!error" {
+                None
+            } else {
+                check_type_local(
+                    _context,
+                    graph,
+                    file_name,
+                    &ast::Identifier {
+                        name: lhs_type.name.clone(),
+                        span: lhs.get_span(),
+                    },
+                )
+            };
 
             if let Op::Dot = op {
                 if let Some(lhs_symbol) = lhs_symbol {
@@ -993,39 +1160,41 @@ pub fn get_type_local(
                                 rhs_ident,
                                 &span,
                             );
-                        } else if let ast::Expression::Call(call) = rhs.as_ref() {
-                            if let ast::Expression::Identifier(rhs_ident) =
-                                call.0.expression.as_ref()
-                            {
-                                let (func_type, typed_expr) = get_type_field_dot(
-                                    _context,
-                                    graph,
-                                    file_name,
-                                    &lhs_type,
-                                    &lhs_typed_expr,
-                                    lhs_symbol,
-                                    lhs_symbol_node,
-                                    rhs_ident,
-                                    &span,
-                                );
+                        }
+                        // else if let ast::Expression::Call(call) = rhs.as_ref() {
+                        //     if let ast::Expression::Identifier(rhs_ident) =
+                        //         call.0.expression.as_ref()
+                        //     {
+                        //         let (func_type, typed_expr) = get_type_field_dot(
+                        //             _context,
+                        //             graph,
+                        //             file_name,
+                        //             &lhs_type,
+                        //             &lhs_typed_expr,
+                        //             lhs_symbol,
+                        //             lhs_symbol_node,
+                        //             rhs_ident,
+                        //             &span,
+                        //         );
 
-                                let func_type =
-                                    ExpandedType::from_string(graph, file_name, &func_type);
+                        //         let func_type =
+                        //             ExpandedType::from_string(graph, file_name, &func_type);
 
-                                get_call_local(
-                                    _context,
-                                    scope,
-                                    graph,
-                                    file_name,
-                                    intermediate,
-                                    &call.0,
-                                    &func_type,
-                                    &typed_expr,
-                                )
-                            } else {
-                                ("!error".to_owned(), TypedExpression::Error())
-                            }
-                        } else {
+                        //         get_call_local(
+                        //             _context,
+                        //             scope,
+                        //             graph,
+                        //             file_name,
+                        //             intermediate,
+                        //             &call.0,
+                        //             &func_type,
+                        //             &typed_expr,
+                        //         )
+                        //     } else {
+                        //         ("!error".to_owned(), TypedExpression::Error())
+                        //     }
+                        // }
+                        else {
                             let (rhs_type, _rhs_typed_expr) = get_type_local(
                                 _context,
                                 scope,
@@ -1062,6 +1231,66 @@ pub fn get_type_local(
                     _context.alerts.push(SpannedAlert::error(
                         "Expected struct".to_string(),
                         format!("got: '{}'", lhs_type.name),
+                        Location::new(file_name.to_string(), USizeTuple(span.start, span.end)),
+                    ));
+                    return ("!error".to_string(), TypedExpression::Error());
+                }
+            } else if let ast::Expression::Error((_, _)) = lhs.as_ref() {
+                // Unary operator
+                let (rhs_type, rhs_typed_expr) =
+                    get_type_local(_context, scope, graph, file_name, intermediate, rhs);
+                let rhs_type = ExpandedType::from_string(graph, file_name, &rhs_type);
+                let rhs_symbol = check_type_local(
+                    _context,
+                    graph,
+                    file_name,
+                    &ast::Identifier {
+                        name: rhs_type.name.clone(),
+                        span: rhs.get_span(),
+                    },
+                );
+                if let Some(rhs_symbol) = rhs_symbol {
+                    let mut params = vec![rhs_type];
+                    let method_op = check_method_local(
+                        _context,
+                        graph,
+                        file_name,
+                        span,
+                        rhs_symbol,
+                        &params[0].generics,
+                        &format!("__prefix_operator_{}", op.get_code_name()),
+                        &params,
+                    );
+
+                    let rhs_type_after = params.remove(0);
+
+                    let mut rhs_type_name = rhs_type_after.name.clone();
+
+                    if let Some(rhs_symbol_node) = graph
+                        .files
+                        .get(file_name)
+                        .unwrap()
+                        .get(&rhs_type_after.name)
+                    {
+                        rhs_type_name = rhs_symbol_node.get_namespaced();
+                    }
+
+                    (
+                        method_op.to_owned(),
+                        TypedExpression::Call(
+                            format!(
+                                "__{}___prefix_operator_{}",
+                                rhs_type_name,
+                                op.get_code_name()
+                            ),
+                            vec![rhs_typed_expr],
+                            span.clone(),
+                        ),
+                    )
+                } else {
+                    _context.alerts.push(SpannedAlert::error(
+                        "Undefined right-hand side".to_string(),
+                        format!("The expression is undefined"),
                         Location::new(file_name.to_string(), USizeTuple(span.start, span.end)),
                     ));
                     return ("!error".to_string(), TypedExpression::Error());
@@ -1436,6 +1665,10 @@ impl ExpandedType {
     }
 
     pub fn is_compatible_with(&self, other: &ExpandedType) -> bool {
+        if self.name == "any" || other.name == "any" {
+            return true;
+        }
+
         if self.is_scalar() && other.is_scalar() {
             return true;
         }
