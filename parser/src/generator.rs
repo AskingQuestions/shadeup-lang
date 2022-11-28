@@ -9,6 +9,9 @@ pub struct ProgramOutput {
 
 fn gen_expression_local(graph: &SymbolGraph, file_name: &str, expr: &TypedExpression) -> String {
     match expr {
+        TypedExpression::Wrap(expr, _) => {
+            format!("({})", gen_expression_local(graph, file_name, expr))
+        }
         TypedExpression::Value(value, _) => match value {
             TypedValue::Int(ival) => format!("({} & 0xffffffff)", ival),
             TypedValue::String(sval) => format!("\"{}\"", sval.replace('"', "\\\"")),
@@ -20,6 +23,28 @@ fn gen_expression_local(graph: &SymbolGraph, file_name: &str, expr: &TypedExpres
         TypedExpression::Error() => "/* !error */".to_string(),
         TypedExpression::Identifier(ident, _) => ident.clone(),
         TypedExpression::Call(call, exprs, _) => {
+            // Inline math operations
+            if false {
+                let ops = vec![
+                    ("plus", "+"),
+                    ("minus", "-"),
+                    ("multiply", "*"),
+                    ("divide", "/"),
+                    ("mod", "%"),
+                    ("pow", "**"),
+                ];
+
+                for (name, op) in ops {
+                    if call.ends_with(format!("__operator_{}", name).as_str()) {
+                        let mut args = vec![];
+                        for expr in exprs {
+                            args.push(gen_expression_local(graph, file_name, expr));
+                        }
+                        return format!("({})", args.join(op));
+                    }
+                }
+            }
+
             let mut args = String::new();
 
             for arg in exprs {

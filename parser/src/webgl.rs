@@ -31,6 +31,9 @@ fn translate_primitive_calls(func: &str, a: &str, b: &str, normal: String) -> St
 
 fn gen_expression_local(graph: &SymbolGraph, file_name: &str, expr: &TypedExpression) -> String {
     match expr {
+        TypedExpression::Wrap(expr, _) => {
+            format!("({})", gen_expression_local(graph, file_name, expr))
+        }
         TypedExpression::Value(value, _) => match value {
             TypedValue::Int(ival) => format!("{}", ival),
             TypedValue::String(sval) => format!("\"{}\"", sval.replace('"', "\\\"")),

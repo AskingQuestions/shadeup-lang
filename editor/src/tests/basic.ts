@@ -137,6 +137,13 @@ export default () => [
 	`
 	),
 	TestCase(
+		'expression',
+		`fn main() {
+	assert(436 + 3252 - 235 * 52 + 35 / 5 + 234 ** 3 * (1 - 2), -12821429);
+}
+	`
+	),
+	TestCase(
 		'logic',
 		`fn main() {
 	assert(true && true, true);
@@ -157,10 +164,31 @@ export default () => [
 	assert(true != false, true);
 	assert(false != true, true);
 	assert(false != false, false);
-	assert(true > true, false);
-	assert(true > false, true);
-	assert(false > true, false);
-	assert(false > false, false);
+}`
+	),
+	TestCase(
+		'swizzle',
+		`fn main() {
+	assert((1, 2).x, 1);
+	assert((1, 2).y, 2);
+	assert((1, 2).xy, (1, 2));
+	assert((1, 2, 3).x, 1);
+	assert((1, 2, 3).y, 2);
+	assert((1, 2, 3).z, 3);
+	assert((1, 2, 3).xy, (1, 2));
+	assert((1, 2, 3).yz, (2, 3));
+	assert((1, 2, 3).xyz, (1, 2, 3));
+	assert((1, 2, 3, 4).x, 1);
+	assert((1, 2, 3, 4).y, 2);
+	assert((1, 2, 3, 4).z, 3);
+	assert((1, 2, 3, 4).w, 4);
+	
+	assert((1, 2).yx, (2, 1));
+	assert((1, 2, 3).yx, (2, 1));
+	assert((1, 2, 3).yxz, (2, 1, 3));
+
+	assert((1, 2, 3, 4).zxzx, (3, 1, 3, 1));
+	assert((1, 2, 3, 4).rgb, (1, 2, 3));
 }`
 	)
 ];

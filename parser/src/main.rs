@@ -16,20 +16,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     env.set_file(
         "other.shadeup".to_owned(),
-        "
-        fn test_add() -> int {
-            let a = 1;
-            let b = 2;
-            let c = a + b;
-            return c;
-        }
-
-    fn add() -> int {
-        let a = 1;
-        let b = 2;
-        let c = a + b + test_add();
-        return c;
-    }
+        " 
     "
         .to_string(),
     );

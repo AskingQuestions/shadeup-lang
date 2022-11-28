@@ -68,7 +68,7 @@
 			],
 			`
 			console.log("assert", a,b);
-			postMessage({print: \`\${a} == \${b}\`, passed: a == b});
+			postMessage({print: \`\${a} == \${b}\`, passed: a.toString() == b.toString()});
 			`
 		)
 	];

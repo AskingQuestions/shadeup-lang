@@ -1,3 +1,4 @@
+use chumsky::primitive::Container;
 use serde::{Deserialize, Serialize};
 
 use std::collections::HashMap;
@@ -76,6 +77,7 @@ pub enum TypedExpression {
     Identifier(String, Span),
     KVMap(Vec<(String, TypedExpression)>, Span),
     Shader(TypedShaderInstance, Span),
+    Wrap(Box<TypedExpression>, Span),
     Error(),
 }
 
@@ -87,6 +89,7 @@ impl TypedExpression {
             TypedExpression::Identifier(_, span) => span.clone(),
             TypedExpression::KVMap(_, span) => span.clone(),
             TypedExpression::Shader(_, span) => span.clone(),
+            TypedExpression::Wrap(_, span) => span.clone(),
             TypedExpression::Error() => 0..0,
         }
     }
@@ -221,6 +224,16 @@ fn shake_expression(
                     );
                 }
             }
+        }
+        TypedExpression::Wrap(w, _) => {
+            shake_expression(
+                graph,
+                scope,
+                file_name,
+                in_intermediate,
+                out_intermediate,
+                w,
+            );
         }
         TypedExpression::Value(_, _) => {}
         TypedExpression::Identifier(_ident, _) => {}
@@ -1149,6 +1162,144 @@ pub fn get_type_local(
                         graph.get_symbol_node_in_file(file_name, &lhs_type.name)
                     {
                         if let ast::Expression::Identifier(rhs_ident) = rhs.as_ref() {
+                            let numeric_props =
+                                vec![vec!['x', 'y', 'z', 'w'], vec!['r', 'g', 'b', 'a']];
+                            if lhs_type.is_scalar() {
+                                let keys = rhs_ident.0.name.as_str();
+                                // Single num expansion
+                                for swiz in numeric_props {
+                                    if swiz[0] == keys.chars().nth(0).unwrap() {
+                                        for i in 1..keys.len() {
+                                            if swiz[i] != keys.chars().nth(i).unwrap() {
+                                                _context.alerts.push(SpannedAlert::error(
+                                                    "Invalid linear swizzle".to_string(),
+                                                    format!(
+                                                        "expected: '{}', got: '{}'",
+                                                        swiz[i],
+                                                        keys.chars().nth(i).unwrap()
+                                                    ),
+                                                    Location::new(
+                                                        file_name.to_string(),
+                                                        USizeTuple(
+                                                            rhs_ident.1.start,
+                                                            rhs_ident.1.end,
+                                                        ),
+                                                    ),
+                                                ));
+                                                return (
+                                                    "!error".to_owned(),
+                                                    TypedExpression::Error(),
+                                                );
+                                            }
+                                        }
+
+                                        return (
+                                            format!("{}{}", lhs_type.name, keys.len()),
+                                            gen_up_swizzle(
+                                                _context,
+                                                scope,
+                                                graph,
+                                                file_name,
+                                                intermediate,
+                                                &lhs_typed_expr,
+                                                &lhs_type.name,
+                                                keys.len(),
+                                            ),
+                                        );
+                                    }
+                                }
+
+                                _context.alerts.push(SpannedAlert::error(
+                                    "Scalar types can only be swizzled linearly. e.g. allowed: 1.xyz, disallowed: 1.zx".to_string(),
+                                    format!("got: '{}'", keys),
+                                    Location::new(
+                                        file_name.to_string(),
+                                        USizeTuple(rhs_ident.1.start, rhs_ident.1.end),
+                                    ),
+                                ));
+                                return ("!error".to_owned(), TypedExpression::Error());
+                            } else if lhs_type.is_any_vec() {
+                                let keys = rhs_ident.0.name.as_str();
+                                // Vec swizzle
+                                // (3, 4).xxyy -> __swiz_2_1_1_2_2
+                                for swiz in numeric_props {
+                                    if swiz.contains(&keys.chars().nth(0).unwrap()) {
+                                        let mut nums = vec![];
+                                        for i in 0..keys.len() {
+                                            if !swiz.contains(&keys.chars().nth(i).unwrap()) {
+                                                _context.alerts.push(SpannedAlert::error(
+                                                    "Illegal mixing of swizzles (.e.g xyb)"
+                                                        .to_string(),
+                                                    format!(
+                                                        "expected: {}, got: {}",
+                                                        swiz.iter()
+                                                            .map(|c| c.to_string())
+                                                            .collect::<Vec<String>>()
+                                                            .join(" or "),
+                                                        keys.chars().nth(i).unwrap()
+                                                    ),
+                                                    Location::new(
+                                                        file_name.to_string(),
+                                                        USizeTuple(
+                                                            rhs_ident.1.start,
+                                                            rhs_ident.1.end,
+                                                        ),
+                                                    ),
+                                                ));
+                                                return (
+                                                    "!error".to_owned(),
+                                                    TypedExpression::Error(),
+                                                );
+                                            }
+
+                                            nums.push(
+                                                swiz.iter()
+                                                    .position(|c| {
+                                                        *c == keys.chars().nth(i).unwrap()
+                                                    })
+                                                    .unwrap(),
+                                            );
+                                        }
+
+                                        let len_str = keys.len().to_string();
+
+                                        return (
+                                            format!(
+                                                "{}{}",
+                                                lhs_type.get_name_without_vec(),
+                                                if keys.len() == 1 {
+                                                    ""
+                                                } else {
+                                                    len_str.as_str()
+                                                }
+                                            ),
+                                            gen_cross_swizzle(
+                                                _context,
+                                                scope,
+                                                graph,
+                                                file_name,
+                                                intermediate,
+                                                &lhs_typed_expr,
+                                                &lhs_type.get_name_without_vec(),
+                                                lhs_type.get_vec_size(),
+                                                keys.len(),
+                                                &nums,
+                                            ),
+                                        );
+                                    }
+                                }
+
+                                _context.alerts.push(SpannedAlert::error(
+                                    "Scalar types can only be swizzled linearly. e.g. allowed: 1.xyz, disallowed: 1.zx".to_string(),
+                                    format!("got: '{}'", keys),
+                                    Location::new(
+                                        file_name.to_string(),
+                                        USizeTuple(rhs_ident.1.start, rhs_ident.1.end),
+                                    ),
+                                ));
+                                return ("!error".to_owned(), TypedExpression::Error());
+                            }
+
                             return get_type_field_dot(
                                 _context,
                                 graph,
@@ -1343,8 +1494,205 @@ pub fn get_type_local(
                 }
             }
         }
-        _ => ("!error".to_owned(), TypedExpression::Error()),
+        Expression::List(_) => todo!(),
+        Expression::Tuple((tup, span)) => {
+            if tup.len() == 0 {
+                _context.alerts.push(SpannedAlert::error(
+                    "Undefined vector".to_string(),
+                    format!("here"),
+                    Location::new(
+                        file_name.to_string(),
+                        USizeTuple(expr.get_span().start, expr.get_span().end),
+                    ),
+                ));
+                ("!error".to_string(), TypedExpression::Error())
+            } else if tup.len() == 1 {
+                let (expr_type, typed_expr) =
+                    get_type_local(_context, scope, graph, file_name, intermediate, &tup[0]);
+                (
+                    expr_type,
+                    TypedExpression::Wrap(Box::new(typed_expr), span.clone()),
+                )
+            } else {
+                let mut types = vec![];
+                let mut typed_exprs = vec![];
+                for expr in tup {
+                    let (expr_type, typed_expr) =
+                        get_type_local(_context, scope, graph, file_name, intermediate, expr);
+                    types.push(ExpandedType::from_string(graph, file_name, &expr_type));
+                    typed_exprs.push(typed_expr);
+
+                    if !types[types.len() - 1].is_scalar() {
+                        _context.alerts.push(SpannedAlert::error(
+                            "Non scalar vector element".to_string(),
+                            format!("got: '{}'", types[types.len() - 1].name),
+                            Location::new(
+                                file_name.to_string(),
+                                USizeTuple(expr.get_span().start, expr.get_span().end),
+                            ),
+                        ));
+                        return ("!error".to_string(), TypedExpression::Error());
+                    }
+
+                    if types.len() > 1 {
+                        if types[0].name != types[types.len() - 1].name {
+                            _context.alerts.push(SpannedAlert::error(
+                                "Illegal type mixing in vector".to_string(),
+                                format!(
+                                    "got: '{}' and '{}'",
+                                    types[0].name,
+                                    types[types.len() - 1].name
+                                ),
+                                Location::new(
+                                    file_name.to_string(),
+                                    USizeTuple(span.start, span.end),
+                                ),
+                            ));
+                            return ("!error".to_string(), TypedExpression::Error());
+                        }
+                    }
+                }
+
+                if types.len() > 4 {
+                    _context.alerts.push(SpannedAlert::error(
+                        "Vector size too large".to_string(),
+                        format!("Max of 4, got: '{}'", types.len()),
+                        Location::new(file_name.to_string(), USizeTuple(span.start, span.end)),
+                    ));
+                    return ("!error".to_string(), TypedExpression::Error());
+                }
+
+                (
+                    format!("{}{}", types[0].name, types.len()),
+                    TypedExpression::Call(
+                        format!("__{}{}___make_vec", types[0].name, types.len()),
+                        typed_exprs,
+                        span.clone(),
+                    ),
+                )
+            }
+        }
+        Expression::Ternary(_) => todo!(),
+        //_ => ("!error".to_owned(), TypedExpression::Error()),
     }
+}
+
+fn gen_cross_swizzle(
+    _context: &mut ValidationContext,
+    scope: &Scope,
+    graph: &SymbolGraph,
+    file_name: &str,
+    intermediate: &mut TypedIntermediate,
+    expr: &TypedExpression,
+    name: &str,
+    from_len: String,
+    to_len: usize,
+    nums: &[usize],
+) -> TypedExpression {
+    let func_name = format!(
+        "__swiz_cross_{}{}_{}",
+        name,
+        from_len,
+        (0..to_len)
+            .map(|i| format!("{}", nums[i]))
+            .collect::<Vec<String>>()
+            .join("_")
+    );
+
+    let params = vec![expr.clone()];
+
+    if !intermediate.functions.contains_key(&func_name) {
+        let tl = to_len.to_string();
+
+        let func = TypedFunction {
+            name: func_name.clone(),
+            parameters: vec![TypedFunctionParameter {
+                name: "a".to_owned(),
+                type_name: ExpandedType::from_string(
+                    graph,
+                    file_name,
+                    &format!("{}{}", name, from_len),
+                ),
+                default_value: None,
+            }],
+            return_type: ExpandedType::from_string(
+                graph,
+                file_name,
+                &format!("{}{}", name, if to_len == 1 { "" } else { &tl }),
+            ),
+            body: TypedBody {
+                statements: vec![],
+                tags: vec![],
+            },
+            javascript: if to_len == 1 {
+                Some(format!("return a[{}];", nums[0]))
+            } else {
+                Some(format!(
+                    "return [{}];",
+                    (0..to_len)
+                        .map(|i| format!("a[{}]", nums[i]))
+                        .collect::<Vec<String>>()
+                        .join(", ")
+                ))
+            },
+            tags: vec![],
+            tagged: true,
+            tagging: false,
+        };
+
+        intermediate.functions.insert(func_name.clone(), func);
+    }
+
+    let func = TypedExpression::Call(func_name, params, expr.get_span().clone());
+
+    return func;
+}
+
+fn gen_up_swizzle(
+    _context: &mut ValidationContext,
+    scope: &Scope,
+    graph: &SymbolGraph,
+    file_name: &str,
+    intermediate: &mut TypedIntermediate,
+    expr: &TypedExpression,
+    name: &str,
+    len: usize,
+) -> TypedExpression {
+    let func_name = format!("__swiz_up_{}_{}", name, len);
+
+    let mut params = vec![expr.clone()];
+
+    if !intermediate.functions.contains_key(&func_name) {
+        let func = TypedFunction {
+            name: func_name.clone(),
+            parameters: vec![TypedFunctionParameter {
+                name: "a".to_owned(),
+                type_name: ExpandedType::from_string(graph, file_name, name.clone()),
+                default_value: None,
+            }],
+            return_type: ExpandedType::from_string(graph, file_name, &format!("{}{}", name, len)),
+            body: TypedBody {
+                statements: vec![],
+                tags: vec![],
+            },
+            javascript: Some(format!(
+                "return [{}];",
+                (0..len)
+                    .map(|i| format!("a"))
+                    .collect::<Vec<String>>()
+                    .join(", ")
+            )),
+            tags: vec![],
+            tagged: true,
+            tagging: false,
+        };
+
+        intermediate.functions.insert(func_name.clone(), func);
+    }
+
+    let func = TypedExpression::Call(func_name, params, expr.get_span().clone());
+
+    return func;
 }
 
 fn get_type_field_dot(
@@ -1460,6 +1808,15 @@ fn build_shader_expression(
                 );
             }
         }
+        TypedExpression::Wrap(expr, _) => build_shader_expression(
+            _context,
+            graph,
+            scope,
+            shader_def,
+            file_name,
+            intermediate,
+            expr,
+        ),
         TypedExpression::Value(_, _) => {}
         TypedExpression::Identifier(ident, _) => {
             if let Some((scoped_var, barrier)) = scope.check_with_shader_barrier(ident, false) {
@@ -1640,6 +1997,23 @@ impl ExpandedType {
         }
     }
 
+    pub fn get_name_without_vec(&self) -> String {
+        let mut s = self.name.clone();
+        s.pop();
+        return s;
+    }
+
+    pub fn get_vec_size(&self) -> String {
+        self.name
+            .as_str()
+            .chars()
+            .last()
+            .unwrap()
+            .to_string()
+            .parse()
+            .unwrap()
+    }
+
     pub fn is_scalar(&self) -> bool {
         if let Some(ref symbol_type) = self.symbol_type {
             return symbol_type
@@ -1662,6 +2036,10 @@ impl ExpandedType {
         }
 
         false
+    }
+
+    pub fn is_any_vec(&self) -> bool {
+        return self.is_vec(2) || self.is_vec(3) || self.is_vec(4);
     }
 
     pub fn is_compatible_with(&self, other: &ExpandedType) -> bool {
@@ -2470,6 +2848,7 @@ pub fn propagate_tags_from_expression(
                 }
             }
         }
+        TypedExpression::Wrap(_, _) => {}
         TypedExpression::Value(_, _) => {}
         TypedExpression::Identifier(_, _) => {}
         TypedExpression::KVMap(_, _) => {}

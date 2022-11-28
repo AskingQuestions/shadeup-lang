@@ -450,7 +450,7 @@ impl SymbolGraph {
                             ),
                         ],
                     ]
-                    .concat();
+                    .concat()
                 };
                 let mutlti_scalar_methods = |type_name: String,
                                              single_name: String,
@@ -474,7 +474,30 @@ impl SymbolGraph {
                                 .join(", ")
                         )
                     };
+                    let mut make_params = vec![];
+                    let param_names = vec!["x", "y", "z", "w"];
+
+                    for i in 0..num_fields {
+                        make_params.push((
+                            param_names[i as usize].to_string(),
+                            single_name.clone(),
+                            false,
+                        ));
+                    }
                     vec![
+                        (
+                            "__make_vec".to_string(),
+                            SymbolFunction {
+                                span: 0..0,
+                                parameters: make_params,
+                                return_type: Some(type_name.clone()),
+                                javascript: Some(format!(
+                                    "return [{}];",
+                                    param_names[0..num_fields as usize].join(", ")
+                                )),
+                                tags: Vec::new(),
+                            },
+                        ),
                         (
                             "__operator_cross".to_string(),
                             SymbolFunction {
@@ -625,6 +648,37 @@ impl SymbolGraph {
             };
         }
 
+        let gen_eq_ops = |type_name: String| {
+            vec![
+                (
+                    "__operator_equals".to_string(),
+                    SymbolFunction {
+                        span: 0..0,
+                        parameters: vec![
+                            ("__this".to_owned(), type_name.clone(), false),
+                            ("other".to_owned(), type_name.clone(), false),
+                        ],
+                        return_type: Some("bool".to_string()),
+                        javascript: Some("return __this === other;".to_string()),
+                        tags: Vec::new(),
+                    },
+                ),
+                (
+                    "__operator_not_equals".to_string(),
+                    SymbolFunction {
+                        span: 0..0,
+                        parameters: vec![
+                            ("__this".to_owned(), type_name.clone(), false),
+                            ("other".to_owned(), type_name.clone(), false),
+                        ],
+                        return_type: Some("bool".to_string()),
+                        javascript: Some("return __this !== other;".to_string()),
+                        tags: Vec::new(),
+                    },
+                ),
+            ]
+        };
+
         add_scalar!("int", " & 0xffffffff");
         add_scalar!("uint", ">>>0 & 0xffffffff");
         add_scalar!("short", " & 0xffff");
@@ -635,62 +689,70 @@ impl SymbolGraph {
 
         add_primitive!(
             "bool",
-            vec![
-                (
-                    "__prefix_operator_not".to_string(),
-                    SymbolFunction {
-                        span: 0..0,
-                        parameters: vec![("__this".to_owned(), "bool".to_string(), false),],
-                        return_type: Some("bool".to_string()),
-                        javascript: Some(format!("return !__this;")),
-                        tags: Vec::new(),
-                    },
-                ),
-                (
-                    "__operator_and_and".to_string(),
-                    SymbolFunction {
-                        span: 0..0,
-                        parameters: vec![
-                            ("__this".to_owned(), "bool".to_string(), false),
-                            ("other".to_owned(), "bool".to_string(), false),
-                        ],
-                        return_type: Some("bool".to_string()),
-                        javascript: Some("return __this && other;".to_string()),
-                        tags: Vec::new(),
-                    },
-                ),
-                (
-                    "__operator_bar_bar".to_string(),
-                    SymbolFunction {
-                        span: 0..0,
-                        parameters: vec![
-                            ("__this".to_owned(), "bool".to_string(), false),
-                            ("other".to_owned(), "bool".to_string(), false),
-                        ],
-                        return_type: Some("bool".to_string()),
-                        javascript: Some("return __this || other;".to_string()),
-                        tags: Vec::new(),
-                    },
-                ),
+            [
+                vec![
+                    (
+                        "__prefix_operator_not".to_string(),
+                        SymbolFunction {
+                            span: 0..0,
+                            parameters: vec![("__this".to_owned(), "bool".to_string(), false),],
+                            return_type: Some("bool".to_string()),
+                            javascript: Some(format!("return !__this;")),
+                            tags: Vec::new(),
+                        },
+                    ),
+                    (
+                        "__operator_and_and".to_string(),
+                        SymbolFunction {
+                            span: 0..0,
+                            parameters: vec![
+                                ("__this".to_owned(), "bool".to_string(), false),
+                                ("other".to_owned(), "bool".to_string(), false),
+                            ],
+                            return_type: Some("bool".to_string()),
+                            javascript: Some("return __this && other;".to_string()),
+                            tags: Vec::new(),
+                        },
+                    ),
+                    (
+                        "__operator_bar_bar".to_string(),
+                        SymbolFunction {
+                            span: 0..0,
+                            parameters: vec![
+                                ("__this".to_owned(), "bool".to_string(), false),
+                                ("other".to_owned(), "bool".to_string(), false),
+                            ],
+                            return_type: Some("bool".to_string()),
+                            javascript: Some("return __this || other;".to_string()),
+                            tags: Vec::new(),
+                        },
+                    ),
+                ],
+                gen_eq_ops("bool".to_string())
             ]
+            .concat()
         );
         add_primitive!(
             "string",
-            vec![(
-                "__operator_plus".to_string(),
-                SymbolFunction {
-                    span: 0..0,
-                    parameters: vec![
-                        ("__this".to_owned(), "string".to_string(), false),
-                        ("other".to_owned(), "string".to_string(), false),
-                    ],
-                    return_type: Some("string".to_string()),
-                    javascript: Some(format!("return __this + other;")),
-                    tags: Vec::new(),
-                },
-            )]
+            [
+                vec![(
+                    "__operator_plus".to_string(),
+                    SymbolFunction {
+                        span: 0..0,
+                        parameters: vec![
+                            ("__this".to_owned(), "string".to_string(), false),
+                            ("other".to_owned(), "string".to_string(), false),
+                        ],
+                        return_type: Some("string".to_string()),
+                        javascript: Some(format!("return __this + other;")),
+                        tags: Vec::new(),
+                    },
+                )],
+                gen_eq_ops("string".to_string())
+            ]
+            .concat()
         );
-        add_primitive!("byte", Vec::new());
+        add_primitive!("byte", gen_eq_ops("byte".to_string()));
         add_primitive!("array", Vec::new());
         add_primitive!("map", Vec::new());
         add_primitive!("function", Vec::new());

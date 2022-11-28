@@ -1,6 +1,11 @@
 <script>
 	import TestCase from 'src/components/fuzz/TestCase.svelte';
-	import { tester } from 'src/store/test';
+	import { tester, resetCases } from 'src/store/test';
+	import { onMount } from 'svelte';
+
+	onMount(() => {
+		resetCases();
+	});
 </script>
 
 <main class="max-w-screen-xl mx-auto">
