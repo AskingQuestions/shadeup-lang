@@ -117,6 +117,27 @@ pub enum TypedStatement {
         value: TypedExpression,
         span: Span,
     },
+    ForEach {
+        value: String,
+        key: Option<String>,
+        iterator: TypedExpression,
+        body: TypedBody,
+        span: Span,
+    },
+    While {
+        condition: TypedExpression,
+        body: TypedBody,
+        span: Span,
+    },
+    For {
+        init: Box<TypedStatement>,
+        condition: TypedExpression,
+        update: TypedExpression,
+        body: TypedBody,
+        span: Span,
+    },
+    Break(Span),
+    Continue(Span),
     Expression(TypedExpression, Span),
 }
 
@@ -128,6 +149,11 @@ impl TypedStatement {
             TypedStatement::If { span, .. } => span.clone(),
             TypedStatement::Let { span, .. } => span.clone(),
             TypedStatement::Expression(_, span) => span.clone(),
+            TypedStatement::ForEach { span, .. } => span.clone(),
+            TypedStatement::While { span, .. } => span.clone(),
+            TypedStatement::For { span, .. } => span.clone(),
+            TypedStatement::Break(span) => span.clone(),
+            TypedStatement::Continue(span) => span.clone(),
         }
     }
 }
@@ -244,6 +270,192 @@ fn shake_expression(
 }
 
 // Recursively descends into the Typed tree and adds references to the intermediate
+fn shake_statement(
+    graph: &SymbolGraph,
+    new_scope: &Scope,
+    file_name: &str,
+    in_intermediate: &TypedIntermediate,
+    out_intermediate: &mut TypedIntermediate,
+    statement: &TypedStatement,
+) {
+    match statement {
+        TypedStatement::Return(expr, _span) => {
+            shake_expression(
+                graph,
+                new_scope,
+                file_name,
+                in_intermediate,
+                out_intermediate,
+                expr,
+            );
+        }
+        TypedStatement::If {
+            condition,
+            body,
+            else_ifs,
+            else_body,
+            span: _,
+        } => {
+            shake_expression(
+                graph,
+                new_scope,
+                file_name,
+                in_intermediate,
+                out_intermediate,
+                condition,
+            );
+            shake_body(
+                graph,
+                new_scope,
+                file_name,
+                in_intermediate,
+                out_intermediate,
+                body,
+            );
+            for else_if in else_ifs {
+                shake_expression(
+                    graph,
+                    new_scope,
+                    file_name,
+                    in_intermediate,
+                    out_intermediate,
+                    &else_if.0,
+                );
+                shake_body(
+                    graph,
+                    new_scope,
+                    file_name,
+                    in_intermediate,
+                    out_intermediate,
+                    &else_if.1,
+                );
+            }
+            if let Some(else_body) = else_body {
+                shake_body(
+                    graph,
+                    new_scope,
+                    file_name,
+                    in_intermediate,
+                    out_intermediate,
+                    else_body,
+                );
+            }
+        }
+        TypedStatement::Let {
+            name: _,
+            value,
+            span: _,
+        } => {
+            shake_expression(
+                graph,
+                new_scope,
+                file_name,
+                in_intermediate,
+                out_intermediate,
+                value,
+            );
+        }
+        TypedStatement::Expression(expr, _) => {
+            shake_expression(
+                graph,
+                new_scope,
+                file_name,
+                in_intermediate,
+                out_intermediate,
+                expr,
+            );
+        }
+        TypedStatement::Break(_) => {}
+        TypedStatement::Continue(_) => {}
+        TypedStatement::For {
+            init,
+            condition,
+            update,
+            body,
+            span,
+        } => {
+            shake_statement(
+                graph,
+                new_scope,
+                file_name,
+                in_intermediate,
+                out_intermediate,
+                &*init,
+            );
+            shake_expression(
+                graph,
+                new_scope,
+                file_name,
+                in_intermediate,
+                out_intermediate,
+                condition,
+            );
+            shake_expression(
+                graph,
+                new_scope,
+                file_name,
+                in_intermediate,
+                out_intermediate,
+                update,
+            );
+            shake_body(
+                graph,
+                new_scope,
+                file_name,
+                in_intermediate,
+                out_intermediate,
+                body,
+            );
+        }
+        TypedStatement::While {
+            condition,
+            body,
+            span,
+        } => {
+            shake_expression(
+                graph,
+                new_scope,
+                file_name,
+                in_intermediate,
+                out_intermediate,
+                condition,
+            );
+            shake_body(
+                graph,
+                new_scope,
+                file_name,
+                in_intermediate,
+                out_intermediate,
+                body,
+            );
+        }
+
+        TypedStatement::ForEach {
+            value,
+            key,
+            iterator,
+            body,
+            span,
+        } => {
+            shake_expression(
+                graph,
+                new_scope,
+                file_name,
+                in_intermediate,
+                out_intermediate,
+                iterator,
+            );
+            shake_body(
+                graph,
+                new_scope,
+                file_name,
+                in_intermediate,
+                out_intermediate,
+                body,
+            );
+        }
+    }
+}
 fn shake_body(
     graph: &SymbolGraph,
     new_scope: &Scope,
@@ -253,94 +465,14 @@ fn shake_body(
     typed_body: &TypedBody,
 ) {
     for statement in &typed_body.statements {
-        match statement {
-            TypedStatement::Return(expr, _span) => {
-                shake_expression(
-                    graph,
-                    new_scope,
-                    file_name,
-                    in_intermediate,
-                    out_intermediate,
-                    expr,
-                );
-            }
-            TypedStatement::If {
-                condition,
-                body,
-                else_ifs,
-                else_body,
-                span: _,
-            } => {
-                shake_expression(
-                    graph,
-                    new_scope,
-                    file_name,
-                    in_intermediate,
-                    out_intermediate,
-                    condition,
-                );
-                shake_body(
-                    graph,
-                    new_scope,
-                    file_name,
-                    in_intermediate,
-                    out_intermediate,
-                    body,
-                );
-                for else_if in else_ifs {
-                    shake_expression(
-                        graph,
-                        new_scope,
-                        file_name,
-                        in_intermediate,
-                        out_intermediate,
-                        &else_if.0,
-                    );
-                    shake_body(
-                        graph,
-                        new_scope,
-                        file_name,
-                        in_intermediate,
-                        out_intermediate,
-                        &else_if.1,
-                    );
-                }
-                if let Some(else_body) = else_body {
-                    shake_body(
-                        graph,
-                        new_scope,
-                        file_name,
-                        in_intermediate,
-                        out_intermediate,
-                        else_body,
-                    );
-                }
-            }
-            TypedStatement::Let {
-                name: _,
-                value,
-                span: _,
-            } => {
-                shake_expression(
-                    graph,
-                    new_scope,
-                    file_name,
-                    in_intermediate,
-                    out_intermediate,
-                    value,
-                );
-            }
-            TypedStatement::Expression(expr, _) => {
-                shake_expression(
-                    graph,
-                    new_scope,
-                    file_name,
-                    in_intermediate,
-                    out_intermediate,
-                    expr,
-                );
-            }
-        }
+        shake_statement(
+            graph,
+            new_scope,
+            file_name,
+            in_intermediate,
+            out_intermediate,
+            statement,
+        );
     }
 }
 
@@ -1838,6 +1970,203 @@ fn build_shader_expression(
 }
 
 // Recursively descends into the Typed tree and adds references to the shader_inst
+fn build_shader_statement(
+    _context: &mut ValidationContext,
+    graph: &SymbolGraph,
+    new_scope: &Scope,
+    shader_def: &mut TypedShaderDefinition,
+    file_name: &str,
+    intermediate: &TypedIntermediate,
+    statement: &TypedStatement,
+) {
+    match statement {
+        TypedStatement::Return(_, span) => _context.alerts.push(SpannedAlert::error(
+            "Return statement not allowed in shader".to_string(),
+            "Return statements are only allowed in functions".to_string(),
+            Location::new(file_name.to_string(), USizeTuple(span.start, span.end)),
+        )),
+        TypedStatement::If {
+            condition,
+            body,
+            else_ifs,
+            else_body,
+            span: _,
+        } => {
+            build_shader_expression(
+                _context,
+                graph,
+                new_scope,
+                shader_def,
+                file_name,
+                intermediate,
+                condition,
+            );
+            build_shader_definition(
+                _context,
+                graph,
+                new_scope,
+                shader_def,
+                file_name,
+                intermediate,
+                body,
+            );
+            for else_if in else_ifs {
+                build_shader_expression(
+                    _context,
+                    graph,
+                    new_scope,
+                    shader_def,
+                    file_name,
+                    intermediate,
+                    &else_if.0,
+                );
+                build_shader_definition(
+                    _context,
+                    graph,
+                    new_scope,
+                    shader_def,
+                    file_name,
+                    intermediate,
+                    &else_if.1,
+                );
+            }
+            if let Some(else_body) = else_body {
+                build_shader_definition(
+                    _context,
+                    graph,
+                    new_scope,
+                    shader_def,
+                    file_name,
+                    intermediate,
+                    else_body,
+                );
+            }
+        }
+        TypedStatement::Let {
+            name: _,
+            value,
+            span: _,
+        } => {
+            build_shader_expression(
+                _context,
+                graph,
+                new_scope,
+                shader_def,
+                file_name,
+                intermediate,
+                value,
+            );
+        }
+        TypedStatement::Expression(expr, _) => {
+            build_shader_expression(
+                _context,
+                graph,
+                new_scope,
+                shader_def,
+                file_name,
+                intermediate,
+                expr,
+            );
+        }
+        TypedStatement::Break(_) => {}
+        TypedStatement::Continue(_) => {}
+        TypedStatement::For {
+            init,
+            condition,
+            update,
+            body,
+            span,
+        } => {
+            build_shader_statement(
+                _context,
+                graph,
+                new_scope,
+                shader_def,
+                file_name,
+                intermediate,
+                &*init,
+            );
+            build_shader_expression(
+                _context,
+                graph,
+                new_scope,
+                shader_def,
+                file_name,
+                intermediate,
+                condition,
+            );
+            build_shader_expression(
+                _context,
+                graph,
+                new_scope,
+                shader_def,
+                file_name,
+                intermediate,
+                update,
+            );
+            build_shader_definition(
+                _context,
+                graph,
+                new_scope,
+                shader_def,
+                file_name,
+                intermediate,
+                body,
+            );
+        }
+        TypedStatement::While {
+            condition,
+            body,
+            span,
+        } => {
+            build_shader_expression(
+                _context,
+                graph,
+                new_scope,
+                shader_def,
+                file_name,
+                intermediate,
+                condition,
+            );
+            build_shader_definition(
+                _context,
+                graph,
+                new_scope,
+                shader_def,
+                file_name,
+                intermediate,
+                body,
+            );
+        }
+
+        TypedStatement::ForEach {
+            value,
+            key,
+            iterator,
+            body,
+            span,
+        } => {
+            build_shader_expression(
+                _context,
+                graph,
+                new_scope,
+                shader_def,
+                file_name,
+                intermediate,
+                iterator,
+            );
+            build_shader_definition(
+                _context,
+                graph,
+                new_scope,
+                shader_def,
+                file_name,
+                intermediate,
+                body,
+            );
+        }
+    }
+}
 fn build_shader_definition(
     _context: &mut ValidationContext,
     graph: &SymbolGraph,
@@ -1848,96 +2177,15 @@ fn build_shader_definition(
     typed_body: &TypedBody,
 ) {
     for statement in &typed_body.statements {
-        match statement {
-            TypedStatement::Return(_, span) => _context.alerts.push(SpannedAlert::error(
-                "Return statement not allowed in shader".to_string(),
-                "Return statements are only allowed in functions".to_string(),
-                Location::new(file_name.to_string(), USizeTuple(span.start, span.end)),
-            )),
-            TypedStatement::If {
-                condition,
-                body,
-                else_ifs,
-                else_body,
-                span: _,
-            } => {
-                build_shader_expression(
-                    _context,
-                    graph,
-                    new_scope,
-                    shader_def,
-                    file_name,
-                    intermediate,
-                    condition,
-                );
-                build_shader_definition(
-                    _context,
-                    graph,
-                    new_scope,
-                    shader_def,
-                    file_name,
-                    intermediate,
-                    body,
-                );
-                for else_if in else_ifs {
-                    build_shader_expression(
-                        _context,
-                        graph,
-                        new_scope,
-                        shader_def,
-                        file_name,
-                        intermediate,
-                        &else_if.0,
-                    );
-                    build_shader_definition(
-                        _context,
-                        graph,
-                        new_scope,
-                        shader_def,
-                        file_name,
-                        intermediate,
-                        &else_if.1,
-                    );
-                }
-                if let Some(else_body) = else_body {
-                    build_shader_definition(
-                        _context,
-                        graph,
-                        new_scope,
-                        shader_def,
-                        file_name,
-                        intermediate,
-                        else_body,
-                    );
-                }
-            }
-            TypedStatement::Let {
-                name: _,
-                value,
-                span: _,
-            } => {
-                build_shader_expression(
-                    _context,
-                    graph,
-                    new_scope,
-                    shader_def,
-                    file_name,
-                    intermediate,
-                    value,
-                );
-            }
-            TypedStatement::Expression(expr, _) => {
-                build_shader_expression(
-                    _context,
-                    graph,
-                    new_scope,
-                    shader_def,
-                    file_name,
-                    intermediate,
-                    expr,
-                );
-            }
-        }
+        build_shader_statement(
+            _context,
+            graph,
+            new_scope,
+            shader_def,
+            file_name,
+            intermediate,
+            statement,
+        );
     }
 }
 
@@ -2376,6 +2624,9 @@ fn check_body_local(
                     }
                 }
             }
+            ast::Root::Continue(_) => {}
+            ast::Root::Break(_) => {}
+
             _ => _context.alerts.push(SpannedAlert::error(
                 format!("You cannot define this here"),
                 format!("Attempting to define {}", root.get_kind()),
@@ -2785,45 +3036,86 @@ pub fn retag(func_name: &str, span: &Span, tags: &mut Vec<TypedTag>) -> Vec<Type
     new_tags
 }
 
+pub fn propagate_tags_from_statement(
+    intermediate: &mut TypedIntermediate,
+    statement: &TypedStatement,
+) -> Vec<TypedTag> {
+    let mut tags = vec![];
+    match statement {
+        TypedStatement::Return(expr, _) => {
+            tags.append(&mut propagate_tags_from_expression(intermediate, expr))
+        }
+        TypedStatement::If {
+            condition,
+            body,
+            else_ifs,
+            else_body,
+            span: _,
+        } => {
+            tags.append(&mut propagate_tags_from_expression(intermediate, condition));
+            tags.append(&mut propagate_tags(intermediate, body));
+            for else_if in else_ifs {
+                tags.append(&mut propagate_tags_from_expression(
+                    intermediate,
+                    &else_if.0,
+                ));
+                tags.append(&mut propagate_tags(intermediate, &else_if.1));
+            }
+            if let Some(else_body) = else_body {
+                tags.append(&mut propagate_tags(intermediate, else_body));
+            }
+        }
+        TypedStatement::Let {
+            name: _,
+            value,
+            span: _,
+        } => {
+            tags.append(&mut propagate_tags_from_expression(intermediate, value));
+        }
+        TypedStatement::Expression(expr, _) => {
+            tags.append(&mut propagate_tags_from_expression(intermediate, expr));
+        }
+        TypedStatement::For {
+            init,
+            condition,
+            update,
+            body,
+            span,
+        } => {
+            tags.append(&mut propagate_tags_from_statement(intermediate, init));
+            tags.append(&mut propagate_tags_from_expression(intermediate, condition));
+            tags.append(&mut propagate_tags_from_expression(intermediate, update));
+            tags.append(&mut propagate_tags(intermediate, body));
+        }
+        TypedStatement::While {
+            condition,
+            body,
+            span: _,
+        } => {
+            tags.append(&mut propagate_tags_from_expression(intermediate, condition));
+            tags.append(&mut propagate_tags(intermediate, body));
+        }
+        TypedStatement::ForEach {
+            value,
+            key,
+            iterator,
+            body,
+            span,
+        } => {
+            tags.append(&mut propagate_tags_from_expression(intermediate, iterator));
+            tags.append(&mut propagate_tags(intermediate, body));
+        }
+        TypedStatement::Break(span) => {}
+        TypedStatement::Continue(span) => {}
+    }
+
+    tags
+}
 pub fn propagate_tags(intermediate: &mut TypedIntermediate, body: &TypedBody) -> Vec<TypedTag> {
     let mut tags = vec![];
 
     for statement in body.statements.iter() {
-        match statement {
-            TypedStatement::Return(expr, _) => {
-                tags.append(&mut propagate_tags_from_expression(intermediate, expr))
-            }
-            TypedStatement::If {
-                condition,
-                body,
-                else_ifs,
-                else_body,
-                span: _,
-            } => {
-                tags.append(&mut propagate_tags_from_expression(intermediate, condition));
-                tags.append(&mut propagate_tags(intermediate, body));
-                for else_if in else_ifs {
-                    tags.append(&mut propagate_tags_from_expression(
-                        intermediate,
-                        &else_if.0,
-                    ));
-                    tags.append(&mut propagate_tags(intermediate, &else_if.1));
-                }
-                if let Some(else_body) = else_body {
-                    tags.append(&mut propagate_tags(intermediate, else_body));
-                }
-            }
-            TypedStatement::Let {
-                name: _,
-                value,
-                span: _,
-            } => {
-                tags.append(&mut propagate_tags_from_expression(intermediate, value));
-            }
-            TypedStatement::Expression(expr, _) => {
-                tags.append(&mut propagate_tags_from_expression(intermediate, expr));
-            }
-        }
+        tags.append(&mut propagate_tags_from_statement(intermediate, statement));
     }
 
     tags

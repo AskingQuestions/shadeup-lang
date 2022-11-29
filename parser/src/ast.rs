@@ -100,8 +100,13 @@ pub enum Root {
     Struct(Struct),
     Impl(Impl),
     If(If),
+    For(For),
+    ForEach(ForEach),
+    While(While),
     Let(Let),
     Return(Return),
+    Break(Span),
+    Continue(Span),
     Error,
 }
 
@@ -118,6 +123,11 @@ impl Root {
             Root::If(_) => "if",
             Root::Let(_) => "let",
             Root::Return(_) => "return",
+            Root::ForEach(_) => "for_each",
+            Root::For(_) => "for",
+            Root::While(_) => "while",
+            Root::Break(_) => "break",
+            Root::Continue(_) => "continue",
             Root::Error => "error",
         }
     }
@@ -134,6 +144,11 @@ impl Root {
             Root::If(i) => i.span.clone(),
             Root::Let(l) => l.span.clone(),
             Root::Return(r) => r.span.clone(),
+            Root::ForEach(f) => f.span.clone(),
+            Root::For(f) => f.span.clone(),
+            Root::While(w) => w.span.clone(),
+            Root::Break(s) => s.clone(),
+            Root::Continue(s) => s.clone(),
             Root::Error => Span { start: 0, end: 0 },
         }
     }
@@ -150,6 +165,11 @@ impl Root {
             Root::If(i) => i.span.clone(),
             Root::Let(l) => l.span.clone(),
             Root::Return(r) => r.span.clone(),
+            Root::ForEach(f) => f.span.clone(),
+            Root::For(f) => f.span.clone(),
+            Root::While(w) => w.span.clone(),
+            Root::Break(s) => s.clone(),
+            Root::Continue(s) => s.clone(),
             Root::Error => Span { start: 0, end: 0 },
         }
     }
@@ -326,6 +346,32 @@ pub struct If {
     pub body: Block,
     pub else_ifs: Vec<If>,
     pub else_body: Option<Block>,
+    pub span: Span,
+}
+
+#[derive(Clone, Debug)]
+pub struct For {
+    pub first: Box<Root>,
+    pub second: Expression,
+    pub third: Expression,
+    pub body: Block,
+    pub span: Span,
+}
+
+#[derive(Clone, Debug)]
+pub struct ForEach {
+    pub variable: Identifier,
+    pub counter: Option<Identifier>,
+
+    pub iterable: Expression,
+    pub body: Block,
+    pub span: Span,
+}
+
+#[derive(Clone, Debug)]
+pub struct While {
+    pub condition: Expression,
+    pub body: Block,
     pub span: Span,
 }
 

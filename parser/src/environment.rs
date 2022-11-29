@@ -453,6 +453,43 @@ fn shift_shader_ids_body(body: &mut TypedBody, by: usize) {
                     shift_shader_ids_body(else_body, by);
                 }
             }
+            TypedStatement::While {
+                condition,
+                body: while_body,
+                span: _,
+            } => {
+                shift_shader_ids_expression(condition, by);
+                shift_shader_ids_body(while_body, by);
+            }
+            TypedStatement::For {
+                init,
+                condition,
+                update,
+                body,
+                span,
+            } => {
+                shift_shader_ids_body(body, by);
+            }
+            TypedStatement::Break(_) => {}
+            TypedStatement::Continue(_) => {}
+            TypedStatement::ForEach {
+                value,
+                key,
+                iterator,
+                body,
+                span,
+            } => {
+                shift_shader_ids_expression(iterator, by);
+                shift_shader_ids_body(body, by);
+            }
+            TypedStatement::While {
+                condition,
+                body,
+                span,
+            } => {
+                shift_shader_ids_expression(condition, by);
+                shift_shader_ids_body(body, by);
+            }
         };
     }
 }

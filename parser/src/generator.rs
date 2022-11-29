@@ -91,72 +91,146 @@ fn gen_expression_local(graph: &SymbolGraph, file_name: &str, expr: &TypedExpres
     }
 }
 
+fn gen_statement_local(graph: &SymbolGraph, file_name: &str, root: &TypedStatement) -> String {
+    match root {
+        TypedStatement::Let {
+            name,
+            value,
+            span: _,
+        } => {
+            format!(
+                "let {} = {};\n",
+                name,
+                gen_expression_local(graph, file_name, &value)
+            )
+        }
+        TypedStatement::Expression(expr, _) => {
+            format!("{};\n", gen_expression_local(graph, file_name, &expr))
+        }
+        TypedStatement::If {
+            condition,
+            body,
+            else_body,
+            else_ifs,
+            span: _,
+        } => {
+            let mut out = String::new();
+
+            out.push_str(&format!(
+                "if ({}) {{\n",
+                gen_expression_local(graph, file_name, &condition)
+            ));
+
+            out.push_str(&gen_body_local(graph, file_name, &body));
+
+            for elif in else_ifs {
+                out.push_str(&format!(
+                    "\n}} else if ({}) {{\n",
+                    gen_expression_local(graph, file_name, &elif.0)
+                ));
+
+                out.push_str(&gen_body_local(graph, file_name, &elif.1));
+            }
+
+            if else_body.is_some() {
+                out.push_str("\n} else {\n");
+
+                out.push_str(&gen_body_local(
+                    graph,
+                    file_name,
+                    else_body.as_ref().unwrap(),
+                ));
+            }
+
+            out.push_str("}");
+
+            out
+        }
+        TypedStatement::Return(_return, _) => {
+            format!(
+                "return {};\n",
+                gen_expression_local(graph, file_name, &_return)
+            )
+        }
+        TypedStatement::For {
+            init,
+            condition,
+            update,
+            body,
+            span,
+        } => {
+            let mut out = String::new();
+
+            out.push_str(&format!(
+                "for ({}; {}; {};) {{\n",
+                gen_statement_local(graph, file_name, init),
+                gen_expression_local(graph, file_name, condition),
+                gen_expression_local(graph, file_name, update)
+            ));
+
+            out.push_str(&gen_body_local(graph, file_name, &body));
+
+            out.push_str("}");
+
+            out
+        }
+        TypedStatement::ForEach {
+            value,
+            key,
+            iterator,
+            body,
+            span,
+        } => {
+            let mut out = String::new();
+
+            out.push_str(&format!(
+                "for (let {} of {}) {{\n",
+                if let Some(key) = key {
+                    format!("[{}, {}]", key, value)
+                } else {
+                    format!("{}", value)
+                },
+                gen_expression_local(graph, file_name, iterator)
+            ));
+
+            if let Some(key) = key {
+                out.push_str(&format!("let {} = {};\n", key, value));
+            }
+
+            out.push_str(&gen_body_local(graph, file_name, &body));
+
+            out.push_str("}");
+
+            out
+        }
+        TypedStatement::While {
+            condition,
+            body,
+            span,
+        } => {
+            let mut out = String::new();
+
+            out.push_str(&format!(
+                "while ({}) {{\n",
+                gen_expression_local(graph, file_name, condition)
+            ));
+
+            out.push_str(&gen_body_local(graph, file_name, &body));
+
+            out.push_str("}");
+
+            out
+        }
+        TypedStatement::Break(span) => "break;\n".to_string(),
+        TypedStatement::Continue(span) => "continue;\n".to_string(),
+    }
+}
+
 fn gen_body_local(graph: &SymbolGraph, file_name: &str, body: &TypedBody) -> String {
     let mut out = String::new();
 
     for root in &body.statements {
-        let line: String = match root {
-            TypedStatement::Let {
-                name,
-                value,
-                span: _,
-            } => {
-                format!(
-                    "let {} = {};\n",
-                    name,
-                    gen_expression_local(graph, file_name, &value)
-                )
-            }
-            TypedStatement::Expression(expr, _) => {
-                format!("{};\n", gen_expression_local(graph, file_name, &expr))
-            }
-            TypedStatement::If {
-                condition,
-                body,
-                else_body,
-                else_ifs,
-                span: _,
-            } => {
-                let mut out = String::new();
-
-                out.push_str(&format!(
-                    "if ({}) {{\n",
-                    gen_expression_local(graph, file_name, &condition)
-                ));
-
-                out.push_str(&gen_body_local(graph, file_name, &body));
-
-                for elif in else_ifs {
-                    out.push_str(&format!(
-                        "\n}} else if ({}) {{\n",
-                        gen_expression_local(graph, file_name, &elif.0)
-                    ));
-
-                    out.push_str(&gen_body_local(graph, file_name, &elif.1));
-                }
-
-                if else_body.is_some() {
-                    out.push_str("\n} else {\n");
-
-                    out.push_str(&gen_body_local(
-                        graph,
-                        file_name,
-                        else_body.as_ref().unwrap(),
-                    ));
-                }
-
-                out.push_str("}");
-
-                out
-            }
-            TypedStatement::Return(_return, _) => {
-                format!(
-                    "return {};\n",
-                    gen_expression_local(graph, file_name, &_return)
-                )
-            }
-        };
-
+        let line: String = gen_statement_local(graph, file_name, root);
         out.push_str(&line);
     }
 

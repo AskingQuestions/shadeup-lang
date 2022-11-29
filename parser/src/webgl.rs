@@ -98,71 +98,146 @@ fn gen_expression_local(graph: &SymbolGraph, file_name: &str, expr: &TypedExpres
     }
 }
 
+fn gen_statement_local(graph: &SymbolGraph, file_name: &str, root: &TypedStatement) -> String {
+    match root {
+        TypedStatement::Let {
+            name,
+            value,
+            span: _,
+        } => {
+            format!(
+                "let {} = {};\n",
+                name,
+                gen_expression_local(graph, file_name, &value)
+            )
+        }
+        TypedStatement::Expression(expr, _) => {
+            format!("{};\n", gen_expression_local(graph, file_name, &expr))
+        }
+        TypedStatement::If {
+            condition,
+            body,
+            else_body,
+            else_ifs,
+            span: _,
+        } => {
+            let mut out = String::new();
+
+            out.push_str(&format!(
+                "if ({}) {{\n",
+                gen_expression_local(graph, file_name, &condition)
+            ));
+
+            out.push_str(&gen_body_local(graph, file_name, &body));
+
+            for elif in else_ifs {
+                out.push_str(&format!(
+                    "\n}} else if ({}) {{\n",
+                    gen_expression_local(graph, file_name, &elif.0)
+                ));
+
+                out.push_str(&gen_body_local(graph, file_name, &elif.1));
+            }
+
+            if else_body.is_some() {
+                out.push_str("\n} else {\n");
+
+                out.push_str(&gen_body_local(
+                    graph,
+                    file_name,
+                    else_body.as_ref().unwrap(),
+                ));
+            }
+
+            out.push_str("}\n");
+
+            out
+        }
+        TypedStatement::Return(_return, _) => {
+            format!(
+                "return {};\n",
+                gen_expression_local(graph, file_name, &_return)
+            )
+        }
+        TypedStatement::For {
+            init,
+            condition,
+            update,
+            body,
+            span,
+        } => {
+            let mut out = String::new();
+
+            out.push_str(&format!(
+                "for ({}; {}; {};) {{\n",
+                gen_statement_local(graph, file_name, init),
+                gen_expression_local(graph, file_name, condition),
+                gen_expression_local(graph, file_name, update)
+            ));
+
+            out.push_str(&gen_body_local(graph, file_name, &body));
+
+            out.push_str("}");
+
+            out
+        }
+        TypedStatement::ForEach {
+            value,
+            key,
+            iterator,
+            body,
+            span,
+        } => {
+            let mut out = String::new();
+
+            out.push_str(&format!(
+                "for (let {} of {}) {{\n",
+                if let Some(key) = key {
+                    format!("[{}, {}]", key, value)
+                } else {
+                    format!("{}", value)
+                },
+                gen_expression_local(graph, file_name, iterator)
+            ));
+
+            if let Some(key) = key {
+                out.push_str(&format!("let {} = {};\n", key, value));
+            }
+
+            out.push_str(&gen_body_local(graph, file_name, &body));
+
+            out.push_str("}");
+
+            out
+        }
+        TypedStatement::While {
+            condition,
+            body,
+            span,
+        } => {
+            let mut out = String::new();
+
+            out.push_str(&format!(
+                "while ({}) {{\n",
+                gen_expression_local(graph, file_name, condition)
+            ));
+
+            out.push_str(&gen_body_local(graph, file_name, &body));
+
+            out.push_str("}");
+
+            out
+        }
+        TypedStatement::Break(span) => "break;\n".to_string(),
+        TypedStatement::Continue(span) => "continue;\n".to_string(),
+    }
+}
+
 fn gen_body_local(graph: &SymbolGraph, file_name: &str, body: &TypedBody) -> String {
     let mut out = String::new();
 
     for root in &body.statements {
-        let line: String = match root {
-            TypedStatement::Let {
-                name,
-                value,
-                span: _,
-            } => {
-                format!(
-                    "let {} = {};\n",
-                    name,
-                    gen_expression_local(graph, file_name, &value)
-                )
-            }
-            TypedStatement::Expression(expr, _) => {
-                format!("{};\n", gen_expression_local(graph, file_name, &expr))
-            }
-            TypedStatement::If {
-                condition,
-                body,
-                else_body,
-                else_ifs,
-                span: _,
-            } => {
-                let mut out = String::new();
-
-                out.push_str(&format!(
-                    "if ({}) {{\n",
-                    gen_expression_local(graph, file_name, &condition)
-                ));
-
-                out.push_str(&gen_body_local(graph, file_name, &body));
-
-                for elif in else_ifs {
-                    out.push_str(&format!(
-                        "\n}} else if ({}) {{\n",
-                        gen_expression_local(graph, file_name, &elif.0)
-                    ));
-
-                    out.push_str(&gen_body_local(graph, file_name, &elif.1));
-                }
-
-                if else_body.is_some() {
-                    out.push_str("\n} else {\n");
-
-                    out.push_str(&gen_body_local(
-                        graph,
-                        file_name,
-                        else_body.as_ref().unwrap(),
-                    ));
-                }
-
-                out.push_str("}\n");
-
-                out
-            }
-            TypedStatement::Return(_return, _) => {
-                format!(
-                    "return {};\n",
-                    gen_expression_local(graph, file_name, &_return)
-                )
-            }
-        };
+        let line: String = gen_statement_local(graph, file_name, root);
 
         out.push_str(&line);
     }
@@ -300,39 +375,75 @@ fn rename_in_identifiers_expression(expr: &mut TypedExpression, idents: &Vec<&st
         _ => {}
     };
 }
+fn rename_in_identifiers_statement(statement: &mut TypedStatement, idents: &Vec<&str>) {
+    match statement {
+        TypedStatement::Expression(expr, _) => {
+            rename_in_identifiers_expression(expr, idents);
+        }
+        TypedStatement::Return(expr, _) => {
+            rename_in_identifiers_expression(expr, idents);
+        }
+        TypedStatement::Let {
+            name: _,
+            value,
+            span: _,
+        } => {
+            rename_in_identifiers_expression(value, idents);
+        }
+        TypedStatement::If {
+            condition,
+            body: if_body,
+            else_ifs,
+            else_body,
+            span: _,
+        } => {
+            rename_in_identifiers_expression(condition, idents);
+            rename_in_identifiers(if_body, idents);
+            for (condition, el_body) in else_ifs {
+                rename_in_identifiers_expression(condition, idents);
+                rename_in_identifiers(el_body, idents);
+            }
+            if let Some(else_body) = else_body {
+                rename_in_identifiers(else_body, idents);
+            }
+        }
+        TypedStatement::While {
+            condition,
+            body: while_body,
+            span: _,
+        } => {
+            rename_in_identifiers_expression(condition, idents);
+            rename_in_identifiers(while_body, idents);
+        }
+        TypedStatement::For {
+            init,
+            condition,
+            update,
+            body,
+            span,
+        } => {
+            rename_in_identifiers_statement(init, idents);
+            rename_in_identifiers_expression(condition, idents);
+            rename_in_identifiers_expression(update, idents);
+            rename_in_identifiers(body, idents);
+        }
+        TypedStatement::Break(span) => {}
+        TypedStatement::Continue(span) => {}
+        TypedStatement::ForEach {
+            value,
+            key,
+            iterator,
+            body,
+            span,
+        } => {
+            rename_in_identifiers_expression(iterator, idents);
+            rename_in_identifiers(body, idents);
+        }
+    };
+}
+
 fn rename_in_identifiers(body: &mut TypedBody, idents: &Vec<&str>) {
     for statement in body.statements.iter_mut() {
-        match statement {
-            TypedStatement::Expression(expr, _) => {
-                rename_in_identifiers_expression(expr, idents);
-            }
-            TypedStatement::Return(expr, _) => {
-                rename_in_identifiers_expression(expr, idents);
-            }
-            TypedStatement::Let {
-                name: _,
-                value,
-                span: _,
-            } => {
-                rename_in_identifiers_expression(value, idents);
-            }
-            TypedStatement::If {
-                condition,
-                body: if_body,
-                else_ifs,
-                else_body,
-                span: _,
-            } => {
-                rename_in_identifiers_expression(condition, idents);
-                rename_in_identifiers(if_body, idents);
-                for (condition, el_body) in else_ifs {
-                    rename_in_identifiers_expression(condition, idents);
-                    rename_in_identifiers(el_body, idents);
-                }
-                if let Some(else_body) = else_body {
-                    rename_in_identifiers(else_body, idents);
-                }
-            }
-        };
+        rename_in_identifiers_statement(statement, idents)
     }
 }

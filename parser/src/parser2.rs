@@ -22,6 +22,11 @@ enum Token {
     Fn,
     As,
     From,
+    In,
+    For,
+    While,
+    Break,
+    Continue,
     Import,
     Shader,
     Struct,
@@ -58,6 +63,11 @@ impl fmt::Display for Token {
             Token::Impl => write!(f, "impl"),
             Token::Main => write!(f, "main"),
             Token::Pub => write!(f, "pub"),
+            Token::In => write!(f, "in"),
+            Token::For => write!(f, "for"),
+            Token::While => write!(f, "while"),
+            Token::Break => write!(f, "break"),
+            Token::Continue => write!(f, "continue"),
         }
     }
 }
@@ -178,6 +188,7 @@ fn lexer() -> impl Parser<char, Vec<(Token, Span)>, Error = Simple<char>> {
         "else" => Token::Else,
         "true" => Token::Bool(true),
         "false" => Token::Bool(false),
+        "for" => Token::For,
         "null" => Token::Null,
         "as" => Token::As,
         "from" => Token::From,
@@ -186,6 +197,10 @@ fn lexer() -> impl Parser<char, Vec<(Token, Span)>, Error = Simple<char>> {
         "struct" => Token::Struct,
         "pub" => Token::Pub,
         "impl" => Token::Impl,
+        "in" => Token::In,
+        "while" => Token::While,
+        "break" => Token::Break,
+        "continue" => Token::Continue,
 
         _ => Token::Ident(ident),
     });
@@ -1046,6 +1061,91 @@ fn block_parser() -> impl Parser<Token, Vec<ast::Root>, Error = Simple<Token>> +
             })
             .labelled("let");
 
+        let bounded_block = block_recur
+            .clone()
+            .delimited_by(just(Token::Ctrl('{')), just(Token::Ctrl('}')))
+            // Attempt to recover anything that looks like an if body but contains errors
+            .recover_with(nested_delimiters(
+                Token::Ctrl('{'),
+                Token::Ctrl('}'),
+                [
+                    (Token::Ctrl('('), Token::Ctrl(')')),
+                    (Token::Ctrl('['), Token::Ctrl(']')),
+                ],
+                |_span: Span| vec![],
+            ))
+            .map_with_span(|roots, span| ast::Block {
+                roots: roots,
+                span: span.clone(),
+            });
+
+        let _for_each = just(Token::For)
+            .ignore_then(
+                identifier
+                    .labelled("for identifier")
+                    .then(
+                        just(Token::Ctrl(','))
+                            .ignore_then(identifier.clone())
+                            .or_not(),
+                    )
+                    .then_ignore(just(Token::In))
+                    .then(expression.clone().labelled("for iterable")),
+            )
+            .delimited_by(just(Token::Ctrl('(')), just(Token::Ctrl(')')))
+            .then(bounded_block.clone())
+            .map_with_span(|(((variable, counter), iterable), body), span| {
+                ast::Root::ForEach(ast::ForEach {
+                    counter,
+                    iterable,
+                    variable,
+                    body,
+                    span,
+                })
+            })
+            .labelled("for");
+
+        let _for = just(Token::For)
+            .ignore_then(
+                _let.clone()
+                    .then_ignore(just(Token::Ctrl(';')))
+                    .then(expression.clone().labelled("for condition"))
+                    .then_ignore(just(Token::Ctrl(';')))
+                    .then(expression.clone().labelled("for increment")),
+            )
+            .delimited_by(just(Token::Ctrl('(')), just(Token::Ctrl(')')))
+            .then(bounded_block.clone())
+            .map_with_span(|((((variable), condition), increment), body), span| {
+                ast::Root::For(ast::For {
+                    first: Box::new(variable),
+                    second: condition,
+                    third: increment,
+                    body,
+                    span,
+                })
+            })
+            .labelled("for");
+
+        let _while = just(Token::While)
+            .ignore_then(expression.clone().labelled("while condition"))
+            .delimited_by(just(Token::Ctrl('(')), just(Token::Ctrl(')')))
+            .then(bounded_block.clone())
+            .map_with_span(|(condition, body), span| {
+                ast::Root::While(ast::While {
+                    condition,
+                    body,
+                    span,
+                })
+            })
+            .labelled("while");
+
+        let _break = end_with_semicolon!(just(Token::Break))
+            .map_with_span(|_, span| ast::Root::Break(span))
+            .labelled("break");
+
+        let _continue = end_with_semicolon!(just(Token::Continue))
+            .map_with_span(|_, span| ast::Root::Continue(span))
+            .labelled("continue");
+
         let _if = just(Token::If)
             .ignore_then(
                 expression
@@ -1054,58 +1154,14 @@ fn block_parser() -> impl Parser<Token, Vec<ast::Root>, Error = Simple<Token>> +
                     .delimited_by(just(Token::Ctrl('(')), just(Token::Ctrl(')'))),
             )
             .then(
-                block_recur
-                    .clone()
-                    .delimited_by(just(Token::Ctrl('{')), just(Token::Ctrl('}')))
-                    // Attempt to recover anything that looks like an if body but contains errors
-                    .recover_with(nested_delimiters(
-                        Token::Ctrl('{'),
-                        Token::Ctrl('}'),
-                        [
-                            (Token::Ctrl('('), Token::Ctrl(')')),
-                            (Token::Ctrl('['), Token::Ctrl(']')),
-                        ],
-                        |_span: Span| vec![],
-                    ))
-                    .map_with_span(|roots, span| ast::Block {
-                        roots: roots,
-                        span: span.clone(),
-                    })
-                    .then(
-                        just(Token::Else)
-                            .ignore_then(
-                                just(Token::If)
-                                    .ignore_then(expression.clone().labelled("if condition"))
-                                    .delimited_by(just(Token::Ctrl('(')), just(Token::Ctrl(')')))
-                                    .then(
-                                        block_recur
-                                            .clone()
-                                            .delimited_by(
-                                                just(Token::Ctrl('{')),
-                                                just(Token::Ctrl('}')),
-                                            )
-                                            // Attempt to recover anything that looks like an else body but contains errors
-                                            .recover_with(nested_delimiters(
-                                                Token::Ctrl('{'),
-                                                Token::Ctrl('}'),
-                                                [
-                                                    (Token::Ctrl('('), Token::Ctrl(')')),
-                                                    (Token::Ctrl('['), Token::Ctrl(']')),
-                                                ],
-                                                |_span: Span| vec![],
-                                            )),
-                                    )
-                                    .map_with_span(|(condition, roots), span| ast::If {
-                                        condition,
-                                        body: ast::Block {
-                                            roots: roots,
-                                            span: span.clone(),
-                                        },
-                                        else_ifs: vec![],
-                                        else_body: None,
-                                        span: span.clone(),
-                                    })
-                                    .or(block_recur
+                bounded_block.clone().then(
+                    just(Token::Else)
+                        .ignore_then(
+                            just(Token::If)
+                                .ignore_then(expression.clone().labelled("if condition"))
+                                .delimited_by(just(Token::Ctrl('(')), just(Token::Ctrl(')')))
+                                .then(
+                                    block_recur
                                         .clone()
                                         .delimited_by(
                                             just(Token::Ctrl('{')),
@@ -1119,40 +1175,64 @@ fn block_parser() -> impl Parser<Token, Vec<ast::Root>, Error = Simple<Token>> +
                                                 (Token::Ctrl('('), Token::Ctrl(')')),
                                                 (Token::Ctrl('['), Token::Ctrl(']')),
                                             ],
-                                            |span: Span| {
-                                                vec![ast::Root::If(ast::If {
-                                                    condition: ast::Expression::Value((
-                                                        ast::Value::Bool(true),
-                                                        span.clone(),
-                                                    )),
-                                                    body: ast::Block {
-                                                        roots: vec![],
-                                                        span: span.clone(),
-                                                    },
-                                                    else_ifs: vec![],
-                                                    else_body: None,
+                                            |_span: Span| vec![],
+                                        )),
+                                )
+                                .map_with_span(|(condition, roots), span| ast::If {
+                                    condition,
+                                    body: ast::Block {
+                                        roots: roots,
+                                        span: span.clone(),
+                                    },
+                                    else_ifs: vec![],
+                                    else_body: None,
+                                    span: span.clone(),
+                                })
+                                .or(block_recur
+                                    .clone()
+                                    .delimited_by(just(Token::Ctrl('{')), just(Token::Ctrl('}')))
+                                    // Attempt to recover anything that looks like an else body but contains errors
+                                    .recover_with(nested_delimiters(
+                                        Token::Ctrl('{'),
+                                        Token::Ctrl('}'),
+                                        [
+                                            (Token::Ctrl('('), Token::Ctrl(')')),
+                                            (Token::Ctrl('['), Token::Ctrl(']')),
+                                        ],
+                                        |span: Span| {
+                                            vec![ast::Root::If(ast::If {
+                                                condition: ast::Expression::Value((
+                                                    ast::Value::Bool(true),
+                                                    span.clone(),
+                                                )),
+                                                body: ast::Block {
+                                                    roots: vec![],
                                                     span: span.clone(),
-                                                })]
-                                            },
-                                        ))
-                                        .map_with_span(|roots, span| ast::Block {
-                                            roots: roots,
-                                            span: span.clone(),
-                                        })
-                                        .map_with_span(|block, span| ast::If {
-                                            condition: ast::Expression::Error(((), 0..0)),
-                                            body: ast::Block {
-                                                roots: vec![],
+                                                },
+                                                else_ifs: vec![],
+                                                else_body: None,
                                                 span: span.clone(),
-                                            },
-                                            else_ifs: vec![],
-                                            else_body: Some(block),
+                                            })]
+                                        },
+                                    ))
+                                    .map_with_span(|roots, span| ast::Block {
+                                        roots: roots,
+                                        span: span.clone(),
+                                    })
+                                    .map_with_span(|block, span| ast::If {
+                                        condition: ast::Expression::Error(((), 0..0)),
+                                        body: ast::Block {
+                                            roots: vec![],
                                             span: span.clone(),
-                                        }))
-                                    .repeated(),
-                            )
-                            .or_not(),
-                    ),
+                                        },
+                                        else_ifs: vec![],
+                                        else_body: Some(block),
+                                        span: span.clone(),
+                                    }))
+                                .repeated(),
+                        )
+                        .or_not(),
+                ),
             )
             .map_with_span(|(cond, (block, ifs)), span| {
                 let mut else_body: Option<ast::Block> = None;
@@ -1259,6 +1339,11 @@ fn block_parser() -> impl Parser<Token, Vec<ast::Root>, Error = Simple<Token>> +
             .or(_let)
             .or(_if)
             .or(_return)
+            // .or(_break)
+            // .or(_continue)
+            // .or(_for)
+            .or(_while)
+            // .or(_for_each)
             .or(_struct)
             .or(_impl)
             .or(func)
