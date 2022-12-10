@@ -105,6 +105,7 @@ pub struct TypedFunctionParameter {
 #[derive(Clone)]
 pub enum TypedStatement {
     Return(TypedExpression, Span),
+    Set(String, TypedExpression, Span),
     If {
         condition: TypedExpression,
         body: TypedBody,
@@ -114,6 +115,7 @@ pub enum TypedStatement {
     },
     Let {
         name: String,
+        type_name: ExpandedType,
         value: TypedExpression,
         span: Span,
     },
@@ -145,6 +147,7 @@ impl TypedStatement {
     #[allow(dead_code)]
     pub fn get_span(&self) -> Span {
         match self {
+            TypedStatement::Set(_, _, span) => span.clone(),
             TypedStatement::Return(_, span) => span.clone(),
             TypedStatement::If { span, .. } => span.clone(),
             TypedStatement::Let { span, .. } => span.clone(),
@@ -159,13 +162,14 @@ impl TypedStatement {
 }
 
 #[allow(dead_code)]
-#[derive(Clone)]
+#[derive(PartialEq, Clone)]
 pub enum TypedTagType {
     Async,
     DynamicAlloc,
     CPUOnly,
     ShaderOnly,
     Recursive,
+    Throws,
 }
 
 impl ToString for TypedTagType {
@@ -176,6 +180,7 @@ impl ToString for TypedTagType {
             TypedTagType::CPUOnly => "cpu_only".to_string(),
             TypedTagType::ShaderOnly => "shader_only".to_string(),
             TypedTagType::Recursive => "recursive".to_string(),
+            TypedTagType::Throws => "can except".to_string(),
         }
     }
 }
@@ -201,9 +206,21 @@ pub struct TypedFunction {
     pub return_type: ExpandedType,
     pub body: TypedBody,
     pub javascript: Option<String>,
+    pub webgl: Option<String>,
     pub tags: Vec<TypedTag>,
     pub tagged: bool,
     pub tagging: bool,
+}
+
+impl TypedFunction {
+    pub fn has_tag(&self, tag: &TypedTagType) -> bool {
+        for t in &self.tags {
+            if t.tag == *tag {
+                return true;
+            }
+        }
+        false
+    }
 }
 
 #[derive(Clone)]
@@ -211,6 +228,12 @@ pub struct TypedIntermediate {
     pub functions: HashMap<String, TypedFunction>,
     pub structs: Vec<(String, Vec<(String, String)>)>,
     pub shaders: Vec<TypedShaderDefinition>,
+}
+
+impl TypedIntermediate {
+    pub fn get_function(&self, name: &str) -> Option<&TypedFunction> {
+        self.functions.get(name)
+    }
 }
 
 fn shake_expression(
@@ -279,6 +302,16 @@ fn shake_statement(
     statement: &TypedStatement,
 ) {
     match statement {
+        TypedStatement::Set(_, expr, _) => {
+            shake_expression(
+                graph,
+                new_scope,
+                file_name,
+                in_intermediate,
+                out_intermediate,
+                expr,
+            );
+        }
         TypedStatement::Return(expr, _span) => {
             shake_expression(
                 graph,
@@ -344,6 +377,7 @@ fn shake_statement(
         TypedStatement::Let {
             name: _,
             value,
+            type_name,
             span: _,
         } => {
             shake_expression(
@@ -532,6 +566,7 @@ impl TypedIntermediate {
             return_type: ExpandedType::from_string(graph, file_name, "void"),
             body: shader.body,
             javascript: None,
+            webgl: None,
             tags: Vec::new(),
             tagged: true,
             tagging: false,
@@ -733,6 +768,16 @@ fn check_method_local<'a>(
             format!(
                 "No operator '{}' was found for type '{}'",
                 method_name.replace("__prefix_operator_", ""),
+                args[0].name
+            ),
+            Location::new(file_name.to_string(), USizeTuple(span.start, span.end)),
+        ));
+    } else if method_name.starts_with("__postfix_operator_") {
+        _context.alerts.push(SpannedAlert::error(
+            "Undefined unary operator".to_string(),
+            format!(
+                "No operator '{}' was found for type '{}'",
+                method_name.replace("__postfix_operator_", ""),
                 args[0].name
             ),
             Location::new(file_name.to_string(), USizeTuple(span.start, span.end)),
@@ -1180,6 +1225,15 @@ pub fn get_type_local(
 
             let mut new_scope = Scope::new();
             new_scope.parent = Some(Box::new(scope));
+            new_scope
+                .definitions
+                .insert("pixel".to_string(), "float4".to_string());
+            new_scope
+                .definitions
+                .insert("context".to_string(), "ShaderContext".to_string());
+            new_scope
+                .definitions
+                .insert("vertex".to_string(), "ShaderVertexOutput".to_string());
             new_scope.shader_barrier = true;
 
             let typed_body = check_body_local(
@@ -1206,6 +1260,7 @@ pub fn get_type_local(
                 file_name,
                 intermediate,
                 &typed_body,
+                true,
             );
 
             let shader_inst = TypedShaderInstance {
@@ -1583,39 +1638,81 @@ pub fn get_type_local(
                     get_type_local(_context, scope, graph, file_name, intermediate, rhs);
                 let rhs_type = ExpandedType::from_string(graph, file_name, &rhs_type);
                 if let Some(lhs_symbol) = lhs_symbol {
-                    let mut params = vec![lhs_type, rhs_type];
-                    let method_op = check_method_local(
-                        _context,
-                        graph,
-                        file_name,
-                        span,
-                        lhs_symbol,
-                        &params[0].generics,
-                        &format!("__operator_{}", op.get_code_name()),
-                        &params,
-                    );
+                    if let ast::Expression::Error((_, _)) = rhs.as_ref() {
+                        let mut params = vec![lhs_type];
+                        let method_op = check_method_local(
+                            _context,
+                            graph,
+                            file_name,
+                            span,
+                            lhs_symbol,
+                            &params[0].generics,
+                            &format!("__postfix_operator_{}", op.get_code_name()),
+                            &params,
+                        );
 
-                    let lhs_type_after = params.remove(0);
+                        let lhs_type_after = params.remove(0);
 
-                    let mut lhs_type_name = lhs_type_after.name.clone();
+                        let mut lhs_type_name = lhs_type_after.name.clone();
 
-                    if let Some(lhs_symbol_node) = graph
-                        .files
-                        .get(file_name)
-                        .unwrap()
-                        .get(&lhs_type_after.name)
-                    {
-                        lhs_type_name = lhs_symbol_node.get_namespaced();
+                        if let Some(lhs_symbol_node) = graph
+                            .files
+                            .get(file_name)
+                            .unwrap()
+                            .get(&lhs_type_after.name)
+                        {
+                            lhs_type_name = lhs_symbol_node.get_namespaced();
+                        }
+                        (
+                            method_op.to_owned(),
+                            TypedExpression::Call(
+                                format!(
+                                    "__{}___postfix_operator_{}",
+                                    lhs_type_name,
+                                    op.get_code_name()
+                                ),
+                                vec![lhs_typed_expr, rhs_typed_expr],
+                                span.clone(),
+                            ),
+                        )
+                    } else {
+                        let mut params = vec![lhs_type, rhs_type];
+                        let method_op = check_method_local(
+                            _context,
+                            graph,
+                            file_name,
+                            span,
+                            lhs_symbol,
+                            &params[0].generics,
+                            &format!("__operator_{}", op.get_code_name()),
+                            &params,
+                        );
+
+                        let lhs_type_after = params.remove(0);
+                        let rhs_type_after = params.remove(0);
+
+                        let mut lhs_type_name = lhs_type_after.name.clone();
+
+                        if let Some(lhs_symbol_node) = graph
+                            .files
+                            .get(file_name)
+                            .unwrap()
+                            .get(&lhs_type_after.name)
+                        {
+                            lhs_type_name = lhs_symbol_node.get_namespaced();
+                        }
+
+                        let rhs_typed_expr_casted =
+                            rhs_type_after.wrap_cast(&lhs_type_after, rhs_typed_expr);
+                        (
+                            method_op.to_owned(),
+                            TypedExpression::Call(
+                                format!("__{}___operator_{}", lhs_type_name, op.get_code_name()),
+                                vec![lhs_typed_expr, rhs_typed_expr_casted],
+                                span.clone(),
+                            ),
+                        )
                     }
-
-                    (
-                        method_op.to_owned(),
-                        TypedExpression::Call(
-                            format!("__{}___operator_{}", lhs_type_name, op.get_code_name()),
-                            vec![lhs_typed_expr, rhs_typed_expr],
-                            span.clone(),
-                        ),
-                    )
                 } else {
                     _context.alerts.push(SpannedAlert::error(
                         "Undefined left-hand side".to_string(),
@@ -1709,6 +1806,16 @@ pub fn get_type_local(
     }
 }
 
+fn webgl_index(i: usize) -> String {
+    match i {
+        0 => "x".to_string(),
+        1 => "y".to_string(),
+        2 => "z".to_string(),
+        3 => "w".to_string(),
+        _ => panic!("Invalid index"),
+    }
+}
+
 fn gen_cross_swizzle(
     _context: &mut ValidationContext,
     scope: &Scope,
@@ -1735,6 +1842,7 @@ fn gen_cross_swizzle(
 
     if !intermediate.functions.contains_key(&func_name) {
         let tl = to_len.to_string();
+        let return_type = format!("{}{}", name, if to_len == 1 { "" } else { &tl });
 
         let func = TypedFunction {
             name: func_name.clone(),
@@ -1747,11 +1855,7 @@ fn gen_cross_swizzle(
                 ),
                 default_value: None,
             }],
-            return_type: ExpandedType::from_string(
-                graph,
-                file_name,
-                &format!("{}{}", name, if to_len == 1 { "" } else { &tl }),
-            ),
+            return_type: ExpandedType::from_string(graph, file_name, &return_type),
             body: TypedBody {
                 statements: vec![],
                 tags: vec![],
@@ -1763,6 +1867,18 @@ fn gen_cross_swizzle(
                     "return [{}];",
                     (0..to_len)
                         .map(|i| format!("a[{}]", nums[i]))
+                        .collect::<Vec<String>>()
+                        .join(", ")
+                ))
+            },
+            webgl: if to_len == 1 {
+                Some(format!("return a.{};", webgl_index(nums[0])))
+            } else {
+                Some(format!(
+                    "return {}({});",
+                    crate::webgl::translate_type(&return_type),
+                    (0..to_len)
+                        .map(|i| format!("a.{}", webgl_index(nums[i])))
                         .collect::<Vec<String>>()
                         .join(", ")
                 ))
@@ -1795,6 +1911,7 @@ fn gen_up_swizzle(
     let mut params = vec![expr.clone()];
 
     if !intermediate.functions.contains_key(&func_name) {
+        let return_type = format!("{}{}", name, len);
         let func = TypedFunction {
             name: func_name.clone(),
             parameters: vec![TypedFunctionParameter {
@@ -1802,13 +1919,21 @@ fn gen_up_swizzle(
                 type_name: ExpandedType::from_string(graph, file_name, name.clone()),
                 default_value: None,
             }],
-            return_type: ExpandedType::from_string(graph, file_name, &format!("{}{}", name, len)),
+            return_type: ExpandedType::from_string(graph, file_name, &return_type),
             body: TypedBody {
                 statements: vec![],
                 tags: vec![],
             },
             javascript: Some(format!(
                 "return [{}];",
+                (0..len)
+                    .map(|i| format!("a"))
+                    .collect::<Vec<String>>()
+                    .join(", ")
+            )),
+            webgl: Some(format!(
+                "return {}({});",
+                crate::webgl::translate_type(&return_type),
                 (0..len)
                     .map(|i| format!("a"))
                     .collect::<Vec<String>>()
@@ -1925,6 +2050,7 @@ fn build_shader_expression(
                     file_name,
                     intermediate,
                     &func.body,
+                    false,
                 );
             }
 
@@ -1978,13 +2104,39 @@ fn build_shader_statement(
     file_name: &str,
     intermediate: &TypedIntermediate,
     statement: &TypedStatement,
+    root_shader: bool,
 ) {
     match statement {
-        TypedStatement::Return(_, span) => _context.alerts.push(SpannedAlert::error(
-            "Return statement not allowed in shader".to_string(),
-            "Return statements are only allowed in functions".to_string(),
-            Location::new(file_name.to_string(), USizeTuple(span.start, span.end)),
-        )),
+        TypedStatement::Set(id, expr, span) => {
+            build_shader_expression(
+                _context,
+                graph,
+                new_scope,
+                shader_def,
+                file_name,
+                intermediate,
+                expr,
+            );
+        }
+        TypedStatement::Return(expr, span) => {
+            if (root_shader) {
+                _context.alerts.push(SpannedAlert::error(
+                    "Return statement not allowed in shader".to_string(),
+                    "Return statements are only allowed in functions".to_string(),
+                    Location::new(file_name.to_string(), USizeTuple(span.start, span.end)),
+                ))
+            } else {
+                build_shader_expression(
+                    _context,
+                    graph,
+                    new_scope,
+                    shader_def,
+                    file_name,
+                    intermediate,
+                    expr,
+                );
+            }
+        }
         TypedStatement::If {
             condition,
             body,
@@ -2009,6 +2161,7 @@ fn build_shader_statement(
                 file_name,
                 intermediate,
                 body,
+                root_shader,
             );
             for else_if in else_ifs {
                 build_shader_expression(
@@ -2028,6 +2181,7 @@ fn build_shader_statement(
                     file_name,
                     intermediate,
                     &else_if.1,
+                    root_shader,
                 );
             }
             if let Some(else_body) = else_body {
@@ -2039,12 +2193,14 @@ fn build_shader_statement(
                     file_name,
                     intermediate,
                     else_body,
+                    root_shader,
                 );
             }
         }
         TypedStatement::Let {
             name: _,
             value,
+            type_name,
             span: _,
         } => {
             build_shader_expression(
@@ -2085,6 +2241,7 @@ fn build_shader_statement(
                 file_name,
                 intermediate,
                 &*init,
+                root_shader,
             );
             build_shader_expression(
                 _context,
@@ -2112,6 +2269,7 @@ fn build_shader_statement(
                 file_name,
                 intermediate,
                 body,
+                root_shader,
             );
         }
         TypedStatement::While {
@@ -2136,6 +2294,7 @@ fn build_shader_statement(
                 file_name,
                 intermediate,
                 body,
+                root_shader,
             );
         }
 
@@ -2163,6 +2322,7 @@ fn build_shader_statement(
                 file_name,
                 intermediate,
                 body,
+                root_shader,
             );
         }
     }
@@ -2175,6 +2335,7 @@ fn build_shader_definition(
     file_name: &str,
     intermediate: &TypedIntermediate,
     typed_body: &TypedBody,
+    root_shader: bool,
 ) {
     for statement in &typed_body.statements {
         build_shader_statement(
@@ -2185,6 +2346,7 @@ fn build_shader_definition(
             file_name,
             intermediate,
             statement,
+            root_shader,
         );
     }
 }
@@ -2468,12 +2630,49 @@ fn check_body_local(
 
                     typed_body.statements.push(TypedStatement::Let {
                         name: _let.name.name.clone(),
+                        type_name: ExpandedType::from_string(graph, file_name, &let_type),
                         value: _to_typed_expr,
                         span: _let.span.clone(),
                     });
                 }
             }
             ast::Root::Expression(expr) => {
+                match expr {
+                    Expression::Op((a, op, b, span)) => match op {
+                        Op::Eq => match a.as_ref() {
+                            Expression::Identifier((id, _)) => {
+                                if scope.check(&id.name).is_some() {
+                                    let (_, typed_expr) = get_type_local(
+                                        _context,
+                                        scope,
+                                        graph,
+                                        file_name,
+                                        intermediate,
+                                        b,
+                                    );
+                                    typed_body.statements.push(TypedStatement::Set(
+                                        id.name.clone(),
+                                        typed_expr,
+                                        span.clone(),
+                                    ));
+                                    continue;
+                                } else {
+                                    _context.alerts.push(SpannedAlert::error(
+                                        "Undefined variable".to_string(),
+                                        format!("'{}' is not defined in this scope", id.name),
+                                        Location::new(
+                                            file_name.to_string(),
+                                            USizeTuple(id.span.start, id.span.end),
+                                        ),
+                                    ));
+                                }
+                            }
+                            _ => {}
+                        },
+                        _ => {}
+                    },
+                    _ => (),
+                }
                 let (_, typed_expr) =
                     get_type_local(_context, scope, graph, file_name, intermediate, expr);
 
@@ -2624,8 +2823,123 @@ fn check_body_local(
                     }
                 }
             }
-            ast::Root::Continue(_) => {}
-            ast::Root::Break(_) => {}
+            ast::Root::Continue(span) => {
+                typed_body
+                    .statements
+                    .push(TypedStatement::Continue(span.clone()));
+            }
+            ast::Root::Break(span) => {
+                typed_body
+                    .statements
+                    .push(TypedStatement::Break(span.clone()));
+            }
+            ast::Root::While(_while) => {
+                let (_type, _cond_typed) = get_type_local(
+                    _context,
+                    scope,
+                    graph,
+                    file_name,
+                    intermediate,
+                    &_while.condition,
+                );
+
+                if _type != "bool" {
+                    _context.alerts.push(SpannedAlert::error(
+                        "Expected bool-like expression in while".to_string(),
+                        format!("got: '{}'", _type),
+                        Location::new(
+                            file_name.to_string(),
+                            USizeTuple(
+                                _while.condition.get_span().start,
+                                _while.condition.get_span().end,
+                            ),
+                        ),
+                    ));
+                }
+
+                let mut new_scope = Scope::new();
+                new_scope.parent = Some(Box::new(scope));
+                let _typed_body = check_body_local(
+                    _context,
+                    &mut new_scope,
+                    graph,
+                    file_name,
+                    intermediate,
+                    &_while.body.roots,
+                    output,
+                );
+
+                typed_body.statements.push(TypedStatement::While {
+                    condition: _cond_typed,
+                    body: _typed_body,
+                    span: _while.span.clone(),
+                });
+            }
+
+            ast::Root::For(_for) => {
+                let mut new_scope = Scope::new();
+                new_scope.parent = Some(Box::new(scope));
+
+                let mut my_typed_body = check_body_local(
+                    _context,
+                    &mut new_scope,
+                    graph,
+                    file_name,
+                    intermediate,
+                    &vec![*_for.first.clone()],
+                    output,
+                );
+
+                let statement = my_typed_body.statements.pop().unwrap();
+
+                let (_type, typed_expr) = get_type_local(
+                    _context,
+                    &mut new_scope,
+                    graph,
+                    file_name,
+                    intermediate,
+                    &_for.second,
+                );
+                if _type != "bool" {
+                    _context.alerts.push(SpannedAlert::error(
+                        "Expected bool-like expression in for".to_string(),
+                        format!("got: '{}'", _type),
+                        Location::new(
+                            file_name.to_string(),
+                            USizeTuple(_for.second.get_span().start, _for.second.get_span().end),
+                        ),
+                    ));
+                }
+
+                let _typed_cond = typed_expr;
+
+                let (_type, typed_expr) = get_type_local(
+                    _context,
+                    &mut new_scope,
+                    graph,
+                    file_name,
+                    intermediate,
+                    &_for.third,
+                );
+
+                let _typed_body = check_body_local(
+                    _context,
+                    &mut new_scope,
+                    graph,
+                    file_name,
+                    intermediate,
+                    &_for.body.roots,
+                    output,
+                );
+
+                typed_body.statements.push(TypedStatement::For {
+                    init: Box::new(statement),
+                    condition: _typed_cond,
+                    update: typed_expr,
+                    body: _typed_body,
+                    span: _for.span.clone(),
+                });
+            }
 
             _ => _context.alerts.push(SpannedAlert::error(
                 format!("You cannot define this here"),
@@ -2758,6 +3072,7 @@ pub fn validate<'a>(
             tagged: false,
             tags: vec![],
             javascript: None,
+            webgl: None,
             name: symbol_node.get_namespaced(),
             parameters: function
                 .parameters
@@ -2866,6 +3181,7 @@ pub fn validate<'a>(
                             statements: vec![],
                         },
                         javascript: Some(format!("return {{{}}};", make_body)),
+                        webgl: None,
                     },
                 );
 
@@ -2898,6 +3214,7 @@ pub fn validate<'a>(
                                 statements: vec![],
                             },
                             javascript: Some(format!("return struct.{};", field.0.name)),
+                            webgl: None,
                         },
                     );
                 }
@@ -3042,6 +3359,9 @@ pub fn propagate_tags_from_statement(
 ) -> Vec<TypedTag> {
     let mut tags = vec![];
     match statement {
+        TypedStatement::Set(_, expr, _) => {
+            tags.append(&mut propagate_tags_from_expression(intermediate, expr))
+        }
         TypedStatement::Return(expr, _) => {
             tags.append(&mut propagate_tags_from_expression(intermediate, expr))
         }
@@ -3067,6 +3387,7 @@ pub fn propagate_tags_from_statement(
         }
         TypedStatement::Let {
             name: _,
+            type_name,
             value,
             span: _,
         } => {

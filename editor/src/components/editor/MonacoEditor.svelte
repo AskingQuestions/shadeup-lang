@@ -1,14 +1,16 @@
 <script lang="ts">
 	import { faSpinner } from '@fortawesome/free-solid-svg-icons';
+	// import { editor } from 'monaco-editor';
 
 	import type ShadeupEnvironment from 'src/shadeup/environment.js';
 	import { onMount } from 'svelte';
 	import Fa from 'svelte-fa';
+	import type { MonacoEditorInstance } from '../../monaco/editor.js';
 
 	let el: HTMLElement | null = null;
 
-	export let filename: string = '';
-	export let environment: ShadeupEnvironment;
+	export let source = '';
+	export let language = 'javascript';
 
 	export let minimap: boolean = true;
 
@@ -16,29 +18,27 @@
 
 	let loaded = false;
 
-	onMount(async () => {
-		gid = ((window as any).$shd_monaco || 0) + 1;
-		(window as any).$shd_monaco = gid;
+	let editorInst: MonacoEditorInstance | null = null;
 
-		const registerLanguages = (await import('src/monaco/languages.js')).default;
-		if (gid === 1) {
-			registerLanguages();
-		}
-		const connectEditorToEnvironment = (await import('src/monaco/shadeup.js')).default;
+	$: {
+		if (editorInst) editorInst.editor?.setValue(source);
+	}
+
+	onMount(async () => {
+		gid = ((window as any).$lang_monaco || 0) + 1;
+		(window as any).$lang_monaco = gid;
 
 		const MonacoEditorInstance = (await import('../../monaco/editor.js')).MonacoEditorInstance;
-		let monacoFilename = `${gid}_${filename}`;
-		const editor = new MonacoEditorInstance(monacoFilename, {
+		editorInst = new MonacoEditorInstance(`lang_${gid}`, {
+			language,
 			minimap: {
 				enabled: minimap
 			}
 		});
 		loaded = true;
 		setTimeout(() => {
-			if (el) editor.mount(el);
-			editor.editor?.setValue(environment.files.get(filename) || '');
-
-			connectEditorToEnvironment(filename, monacoFilename, editor, environment);
+			if (el) editorInst?.mount(el);
+			editorInst?.editor?.setValue(source);
 		}, 1);
 	});
 </script>

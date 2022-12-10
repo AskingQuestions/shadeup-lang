@@ -1,9 +1,13 @@
 import basic from './basic';
+import flow from './flow';
+import functions from './functions';
 import type { TestCaseInstance } from './test';
 
 export default () =>
 	new Map<string, TestCaseInstance[]>(
 		Object.entries({
-			basic: basic()
+			basic: basic(),
+			flow: flow(),
+			functions: functions()
 		})
 	);

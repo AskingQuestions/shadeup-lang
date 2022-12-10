@@ -1,16 +1,24 @@
 use crate::graph::SymbolGraph;
 
-use crate::validator::{TypedBody, TypedExpression, TypedIntermediate, TypedStatement, TypedValue};
+use crate::validator::{
+    TypedBody, TypedExpression, TypedIntermediate, TypedStatement, TypedTag, TypedTagType,
+    TypedValue,
+};
 use crate::webgl;
 
 pub struct ProgramOutput {
     pub javascript: String,
 }
 
-fn gen_expression_local(graph: &SymbolGraph, file_name: &str, expr: &TypedExpression) -> String {
+fn gen_expression_local(
+    graph: &SymbolGraph,
+    file_name: &str,
+    typed: &TypedIntermediate,
+    expr: &TypedExpression,
+) -> String {
     match expr {
         TypedExpression::Wrap(expr, _) => {
-            format!("({})", gen_expression_local(graph, file_name, expr))
+            format!("({})", gen_expression_local(graph, file_name, typed, expr))
         }
         TypedExpression::Value(value, _) => match value {
             TypedValue::Int(ival) => format!("({} & 0xffffffff)", ival),
@@ -22,42 +30,82 @@ fn gen_expression_local(graph: &SymbolGraph, file_name: &str, expr: &TypedExpres
         },
         TypedExpression::Error() => "/* !error */".to_string(),
         TypedExpression::Identifier(ident, _) => ident.clone(),
-        TypedExpression::Call(call, exprs, _) => {
-            // Inline math operations
-            if false {
-                let ops = vec![
-                    ("plus", "+"),
-                    ("minus", "-"),
-                    ("multiply", "*"),
-                    ("divide", "/"),
-                    ("mod", "%"),
-                    ("pow", "**"),
-                ];
+        TypedExpression::Call(call, exprs, span) => {
+            let func = typed.get_function(call);
+
+            if let Some(func) = func {
+                // Inline prefix math operators
+                let ops = vec![("join", "++"), ("minus_minus", "--")];
 
                 for (name, op) in ops {
-                    if call.ends_with(format!("__operator_{}", name).as_str()) {
-                        let mut args = vec![];
-                        for expr in exprs {
-                            args.push(gen_expression_local(graph, file_name, expr));
-                        }
-                        return format!("({})", args.join(op));
+                    if call.ends_with(format!("__prefix_operator_{}", name).as_str()) {
+                        return format!(
+                            "({}{})",
+                            op,
+                            gen_expression_local(graph, file_name, typed, &exprs[0])
+                        );
                     }
                 }
+
+                // Inline postfix math operators
+                let ops = vec![("join", "++"), ("minus_minus", "--")];
+
+                for (name, op) in ops {
+                    if call.ends_with(format!("__postfix_operator_{}", name).as_str()) {
+                        return format!(
+                            "({}{})",
+                            gen_expression_local(graph, file_name, typed, &exprs[0]),
+                            op
+                        );
+                    }
+                }
+
+                // Inline math operations
+                if false {
+                    let ops = vec![
+                        ("plus", "+"),
+                        ("minus", "-"),
+                        ("multiply", "*"),
+                        ("divide", "/"),
+                        ("mod", "%"),
+                        ("pow", "**"),
+                    ];
+
+                    for (name, op) in ops {
+                        if call.ends_with(format!("__operator_{}", name).as_str()) {
+                            let mut args = vec![];
+                            for expr in exprs {
+                                args.push(gen_expression_local(graph, file_name, typed, expr));
+                            }
+                            return format!("({})", args.join(op));
+                        }
+                    }
+                }
+
+                let mut args = String::new();
+
+                for arg in exprs {
+                    args.push_str(&gen_expression_local(graph, file_name, typed, arg));
+                    args.push_str(", ");
+                }
+
+                if func.has_tag(&TypedTagType::Throws) {
+                    args = format!("['{}', {}, {}], {}", call, span.start, span.end, args);
+                }
+
+                if args.len() > 0 {
+                    args.pop();
+                    args.pop();
+                }
+
+                if func.has_tag(&TypedTagType::Async) {
+                    format!("(await {}({}))", call, args)
+                } else {
+                    format!("{}({})", call, args)
+                }
+            } else {
+                format!("/* !error function {} */", call)
             }
-
-            let mut args = String::new();
-
-            for arg in exprs {
-                args.push_str(&gen_expression_local(graph, file_name, arg));
-                args.push_str(", ");
-            }
-
-            if args.len() > 0 {
-                args.pop();
-                args.pop();
-            }
-
-            format!("{}({})", call, args)
         }
         TypedExpression::KVMap(map, _) => {
             let mut entries = String::new();
@@ -66,7 +114,7 @@ fn gen_expression_local(graph: &SymbolGraph, file_name: &str, expr: &TypedExpres
                 entries.push_str(&format!(
                     "{}: {}, ",
                     key,
-                    gen_expression_local(graph, file_name, value)
+                    gen_expression_local(graph, file_name, typed, value)
                 ));
             }
 
@@ -79,7 +127,7 @@ fn gen_expression_local(graph: &SymbolGraph, file_name: &str, expr: &TypedExpres
         }
         TypedExpression::Shader(inst, _) => {
             format!(
-                "__SHADERS[{}].instance({})",
+                "__SHADERS[{}].instance({{{}}})",
                 inst.shader,
                 inst.closure
                     .iter()
@@ -91,21 +139,37 @@ fn gen_expression_local(graph: &SymbolGraph, file_name: &str, expr: &TypedExpres
     }
 }
 
-fn gen_statement_local(graph: &SymbolGraph, file_name: &str, root: &TypedStatement) -> String {
+fn gen_statement_local(
+    graph: &SymbolGraph,
+    file_name: &str,
+    typed: &TypedIntermediate,
+    root: &TypedStatement,
+) -> String {
     match root {
+        TypedStatement::Set(id, expr, _) => {
+            format!(
+                "{} = {};\n",
+                id,
+                gen_expression_local(graph, file_name, typed, &expr)
+            )
+        }
         TypedStatement::Let {
             name,
+            type_name,
             value,
             span: _,
         } => {
             format!(
                 "let {} = {};\n",
                 name,
-                gen_expression_local(graph, file_name, &value)
+                gen_expression_local(graph, file_name, typed, &value)
             )
         }
         TypedStatement::Expression(expr, _) => {
-            format!("{};\n", gen_expression_local(graph, file_name, &expr))
+            format!(
+                "{};\n",
+                gen_expression_local(graph, file_name, typed, &expr)
+            )
         }
         TypedStatement::If {
             condition,
@@ -118,18 +182,18 @@ fn gen_statement_local(graph: &SymbolGraph, file_name: &str, root: &TypedStateme
 
             out.push_str(&format!(
                 "if ({}) {{\n",
-                gen_expression_local(graph, file_name, &condition)
+                gen_expression_local(graph, file_name, typed, &condition)
             ));
 
-            out.push_str(&gen_body_local(graph, file_name, &body));
+            out.push_str(&gen_body_local(graph, file_name, typed, &body));
 
             for elif in else_ifs {
                 out.push_str(&format!(
                     "\n}} else if ({}) {{\n",
-                    gen_expression_local(graph, file_name, &elif.0)
+                    gen_expression_local(graph, file_name, typed, &elif.0)
                 ));
 
-                out.push_str(&gen_body_local(graph, file_name, &elif.1));
+                out.push_str(&gen_body_local(graph, file_name, typed, &elif.1));
             }
 
             if else_body.is_some() {
@@ -138,6 +202,7 @@ fn gen_statement_local(graph: &SymbolGraph, file_name: &str, root: &TypedStateme
                 out.push_str(&gen_body_local(
                     graph,
                     file_name,
+                    typed,
                     else_body.as_ref().unwrap(),
                 ));
             }
@@ -149,7 +214,7 @@ fn gen_statement_local(graph: &SymbolGraph, file_name: &str, root: &TypedStateme
         TypedStatement::Return(_return, _) => {
             format!(
                 "return {};\n",
-                gen_expression_local(graph, file_name, &_return)
+                gen_expression_local(graph, file_name, typed, &_return)
             )
         }
         TypedStatement::For {
@@ -162,13 +227,13 @@ fn gen_statement_local(graph: &SymbolGraph, file_name: &str, root: &TypedStateme
             let mut out = String::new();
 
             out.push_str(&format!(
-                "for ({}; {}; {};) {{\n",
-                gen_statement_local(graph, file_name, init),
-                gen_expression_local(graph, file_name, condition),
-                gen_expression_local(graph, file_name, update)
+                "for ({} {}; {}) {{\n",
+                gen_statement_local(graph, file_name, typed, init),
+                gen_expression_local(graph, file_name, typed, condition),
+                gen_expression_local(graph, file_name, typed, update)
             ));
 
-            out.push_str(&gen_body_local(graph, file_name, &body));
+            out.push_str(&gen_body_local(graph, file_name, typed, &body));
 
             out.push_str("}");
 
@@ -190,14 +255,14 @@ fn gen_statement_local(graph: &SymbolGraph, file_name: &str, root: &TypedStateme
                 } else {
                     format!("{}", value)
                 },
-                gen_expression_local(graph, file_name, iterator)
+                gen_expression_local(graph, file_name, typed, iterator)
             ));
 
             if let Some(key) = key {
                 out.push_str(&format!("let {} = {};\n", key, value));
             }
 
-            out.push_str(&gen_body_local(graph, file_name, &body));
+            out.push_str(&gen_body_local(graph, file_name, typed, &body));
 
             out.push_str("}");
 
@@ -212,10 +277,10 @@ fn gen_statement_local(graph: &SymbolGraph, file_name: &str, root: &TypedStateme
 
             out.push_str(&format!(
                 "while ({}) {{\n",
-                gen_expression_local(graph, file_name, condition)
+                gen_expression_local(graph, file_name, typed, condition)
             ));
 
-            out.push_str(&gen_body_local(graph, file_name, &body));
+            out.push_str(&gen_body_local(graph, file_name, typed, &body));
 
             out.push_str("}");
 
@@ -226,18 +291,28 @@ fn gen_statement_local(graph: &SymbolGraph, file_name: &str, root: &TypedStateme
     }
 }
 
-fn gen_body_local(graph: &SymbolGraph, file_name: &str, body: &TypedBody) -> String {
+fn gen_body_local(
+    graph: &SymbolGraph,
+    file_name: &str,
+    typed: &TypedIntermediate,
+    body: &TypedBody,
+) -> String {
     let mut out = String::new();
 
     for root in &body.statements {
-        let line: String = gen_statement_local(graph, file_name, root);
+        let line: String = gen_statement_local(graph, file_name, typed, root);
         out.push_str(&line);
     }
 
     out
 }
 
-pub fn generate(graph: &SymbolGraph, file_name: &str, typed: &TypedIntermediate) -> ProgramOutput {
+pub fn generate(
+    graph: &SymbolGraph,
+    file_name: &str,
+    full_typed: &TypedIntermediate,
+    typed: &TypedIntermediate,
+) -> ProgramOutput {
     let mut javascript = String::new();
     let file = graph.files.get(file_name);
 
@@ -246,9 +321,15 @@ pub fn generate(graph: &SymbolGraph, file_name: &str, typed: &TypedIntermediate)
     javascript.push_str(&format!("const __SHADERS = [\n"));
 
     for shader in &typed.shaders {
-        let shaken = typed.tree_shake_shader(graph, file_name, shader.clone());
+        let shaken = full_typed.tree_shake_shader(graph, file_name, shader.clone());
         javascript.push_str(&format!(
-            "  __shadeup_gen_shader(`{}`),\n",
+            "  __shadeup_gen_shader({{{}}}, `{}`),\n",
+            shader
+                .parameters
+                .iter()
+                .map(|p| format!("{}: '{}'", p.0, p.1))
+                .collect::<Vec<String>>()
+                .join(", "),
             webgl::generate(graph, file_name, &shaken).webgl
         ));
     }
@@ -293,8 +374,25 @@ pub fn generate(graph: &SymbolGraph, file_name: &str, typed: &TypedIntermediate)
             ));
         }
         javascript.push_str(&format!(
-            "function {}({}) {{\n",
+            "{}function {}({}{}) {{\n",
+            if func.1.has_tag(&TypedTagType::Async) {
+                "async "
+            } else {
+                ""
+            },
             func.0,
+            if func.1.has_tag(&TypedTagType::Throws) {
+                format!(
+                    "__stack_info{}",
+                    if func.1.parameters.len() > 0 {
+                        ", "
+                    } else {
+                        ""
+                    }
+                )
+            } else {
+                "".to_string()
+            },
             func.1
                 .parameters
                 .iter()
@@ -303,10 +401,20 @@ pub fn generate(graph: &SymbolGraph, file_name: &str, typed: &TypedIntermediate)
                 .join(", ")
         ));
 
+        if func.1.has_tag(&TypedTagType::Throws) {
+            javascript.push_str(&format!("try {{\n"));
+        }
+
         if func.1.javascript.is_some() {
             javascript.push_str(&func.1.javascript.as_ref().unwrap());
         } else {
-            javascript.push_str(&gen_body_local(graph, file_name, &func.1.body));
+            javascript.push_str(&gen_body_local(graph, file_name, typed, &func.1.body));
+        }
+
+        if func.1.has_tag(&TypedTagType::Throws) {
+            javascript.push_str(&format!(
+                "}} catch (e) {{\n  throw __shadeup_error(e, __stack_info);\n}}\n"
+            ));
         }
 
         javascript.push_str("\n}\n\n");

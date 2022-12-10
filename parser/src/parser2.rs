@@ -180,6 +180,7 @@ fn lexer() -> impl Parser<char, Vec<(Token, Span)>, Error = Simple<char>> {
     let ctrl = one_of("()[]{};,:").map(|c| Token::Ctrl(c));
 
     // A parser for identifiers and keywords
+
     let ident = text::ident().map(|ident: String| match ident.as_str() {
         "fn" => Token::Fn,
         "let" => Token::Let,
@@ -294,14 +295,32 @@ fn assemble_op_list(my: &[(ast::Expression, Option<Op>, Span)]) -> ast::Expressi
     levels.reverse();
 
     if my.len() == 2 {
-        ast::Expression::Op((
-            Box::new(my[0].0.clone()),
-            my[0].1.as_ref().unwrap().clone(),
-            Box::new(my[1].0.clone()),
-            my[0].2.clone(),
-        ))
+        if my[0].1.is_some() {
+            ast::Expression::Op((
+                Box::new(my[0].0.clone()),
+                my[0].1.as_ref().unwrap().clone(),
+                Box::new(my[1].0.clone()),
+                my[0].2.clone(),
+            ))
+        } else {
+            ast::Expression::Op((
+                Box::new(my[0].0.clone()),
+                Op::Add,
+                Box::new(my[1].0.clone()),
+                my[0].2.clone(),
+            ))
+        }
     } else if my.len() == 1 {
-        my[0].0.clone()
+        if let Some(ref op) = my[0].1 {
+            ast::Expression::Op((
+                Box::new(my[0].0.clone()),
+                op.clone(),
+                Box::new(ast::Expression::Error(((), my[0].2.clone()))),
+                my[0].2.clone(),
+            ))
+        } else {
+            my[0].0.clone()
+        }
         // match my[0].1 {
         //     Some(ref op) => ast::Expression::Op((
         //         Box::new(my[0].0.clone()),
@@ -1089,9 +1108,9 @@ fn block_parser() -> impl Parser<Token, Vec<ast::Root>, Error = Simple<Token>> +
                             .or_not(),
                     )
                     .then_ignore(just(Token::In))
-                    .then(expression.clone().labelled("for iterable")),
+                    .then(expression.clone().labelled("for iterable"))
+                    .delimited_by(just(Token::Ctrl('(')), just(Token::Ctrl(')'))),
             )
-            .delimited_by(just(Token::Ctrl('(')), just(Token::Ctrl(')')))
             .then(bounded_block.clone())
             .map_with_span(|(((variable, counter), iterable), body), span| {
                 ast::Root::ForEach(ast::ForEach {
@@ -1107,12 +1126,11 @@ fn block_parser() -> impl Parser<Token, Vec<ast::Root>, Error = Simple<Token>> +
         let _for = just(Token::For)
             .ignore_then(
                 _let.clone()
-                    .then_ignore(just(Token::Ctrl(';')))
                     .then(expression.clone().labelled("for condition"))
                     .then_ignore(just(Token::Ctrl(';')))
-                    .then(expression.clone().labelled("for increment")),
+                    .then(expression.clone().labelled("for increment"))
+                    .delimited_by(just(Token::Ctrl('(')), just(Token::Ctrl(')'))),
             )
-            .delimited_by(just(Token::Ctrl('(')), just(Token::Ctrl(')')))
             .then(bounded_block.clone())
             .map_with_span(|((((variable), condition), increment), body), span| {
                 ast::Root::For(ast::For {
@@ -1126,8 +1144,12 @@ fn block_parser() -> impl Parser<Token, Vec<ast::Root>, Error = Simple<Token>> +
             .labelled("for");
 
         let _while = just(Token::While)
-            .ignore_then(expression.clone().labelled("while condition"))
-            .delimited_by(just(Token::Ctrl('(')), just(Token::Ctrl(')')))
+            .ignore_then(
+                expression
+                    .clone()
+                    .labelled("while condition")
+                    .delimited_by(just(Token::Ctrl('(')), just(Token::Ctrl(')'))),
+            )
             .then(bounded_block.clone())
             .map_with_span(|(condition, body), span| {
                 ast::Root::While(ast::While {
@@ -1336,14 +1358,14 @@ fn block_parser() -> impl Parser<Token, Vec<ast::Root>, Error = Simple<Token>> +
             end_with_semicolon!(expression.clone().map(|expr| ast::Root::Expression(expr)));
 
         shader_or_main_block
+            .or(_while)
             .or(_let)
             .or(_if)
             .or(_return)
-            // .or(_break)
-            // .or(_continue)
-            // .or(_for)
-            .or(_while)
-            // .or(_for_each)
+            .or(_break)
+            .or(_continue)
+            .or(_for)
+            .or(_for_each)
             .or(_struct)
             .or(_impl)
             .or(func)

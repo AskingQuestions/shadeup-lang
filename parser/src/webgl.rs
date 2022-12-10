@@ -29,6 +29,55 @@ fn translate_primitive_calls(func: &str, a: &str, b: &str, normal: String) -> St
     }
 }
 
+fn is_primitive_op_func(func: &str) -> bool {
+    let i_type = func.split("___operator_");
+    let op = i_type.last().unwrap();
+
+    match op {
+        "plus" => true,
+        "minus" => true,
+        "multiply" => true,
+        "divide" => true,
+        "modulo" => true,
+        "equal" => true,
+        "not_equal" => true,
+        "greater_than" => true,
+        "less_than" => true,
+        "greater_than_or_equal" => true,
+        "less_than_or_equal" => true,
+        "and" => true,
+        "or" => true,
+        "not" => true,
+        _ => false,
+    }
+}
+
+pub fn translate_type(ty: &str) -> String {
+    match ty {
+        "float4" => "vec4".to_string(),
+        "float3" => "vec3".to_string(),
+        "float2" => "vec2".to_string(),
+        "float" => "float".to_string(),
+        "int4" => "ivec4".to_string(),
+        "int3" => "ivec3".to_string(),
+        "int2" => "ivec2".to_string(),
+        "int" => "int".to_string(),
+        "uint4" => "uvec4".to_string(),
+        "uint3" => "uvec3".to_string(),
+        "uint2" => "uvec2".to_string(),
+        "uint" => "uint".to_string(),
+        _ => ty.to_string(),
+    }
+}
+
+fn translate_identifier(id: &str) -> String {
+    if id.starts_with("__") {
+        format!("_i_{}", id.strip_prefix("__").unwrap_or(id)).replace("___", "_ii_")
+    } else {
+        id.to_owned().replace("___", "_ii_")
+    }
+}
+
 fn gen_expression_local(graph: &SymbolGraph, file_name: &str, expr: &TypedExpression) -> String {
     match expr {
         TypedExpression::Wrap(expr, _) => {
@@ -43,7 +92,7 @@ fn gen_expression_local(graph: &SymbolGraph, file_name: &str, expr: &TypedExpres
             TypedValue::Error => "/* !error value */".to_string(),
         },
         TypedExpression::Error() => "/* !error */".to_string(),
-        TypedExpression::Identifier(ident, _) => ident.clone(),
+        TypedExpression::Identifier(ident, _) => translate_identifier(&ident),
         TypedExpression::Call(call, exprs, _) => {
             let mut args = vec![];
 
@@ -58,10 +107,10 @@ fn gen_expression_local(graph: &SymbolGraph, file_name: &str, expr: &TypedExpres
                     call,
                     first,
                     second,
-                    format!("{}({})", call, args.join(", ")),
+                    format!("{}({})", translate_identifier(call), args.join(", ")),
                 )
             } else {
-                format!("{}({})", call, args.join(", "))
+                format!("{}({})", translate_identifier(call), args.join(", "))
             }
         }
         TypedExpression::KVMap(map, _) => {
@@ -100,14 +149,23 @@ fn gen_expression_local(graph: &SymbolGraph, file_name: &str, expr: &TypedExpres
 
 fn gen_statement_local(graph: &SymbolGraph, file_name: &str, root: &TypedStatement) -> String {
     match root {
+        TypedStatement::Set(id, expr, _) => {
+            format!(
+                "{} = {};\n",
+                translate_identifier(id),
+                gen_expression_local(graph, file_name, &expr)
+            )
+        }
         TypedStatement::Let {
             name,
+            type_name,
             value,
             span: _,
         } => {
             format!(
-                "let {} = {};\n",
-                name,
+                "{} {} = {};\n",
+                translate_type(type_name.to_string().as_str()),
+                translate_identifier(name),
                 gen_expression_local(graph, file_name, &value)
             )
         }
@@ -247,6 +305,7 @@ fn gen_body_local(graph: &SymbolGraph, file_name: &str, body: &TypedBody) -> Str
 
 pub fn generate(graph: &SymbolGraph, file_name: &str, typed: &TypedIntermediate) -> ProgramOutput {
     let mut webgl = String::new();
+    // webgl.push_str("#version 300 es\n"); // We now do this on the js side
     let file = graph.files.get(file_name);
 
     let _file = file.unwrap();
@@ -287,7 +346,11 @@ pub fn generate(graph: &SymbolGraph, file_name: &str, typed: &TypedIntermediate)
         for field in &_struct.1 {
             out.push_str(&format!(
                 "{} __get_struct_{}_{}({} struct) {{\nreturn struct.{};\n}}\n",
-                field.1, _struct.0, field.0, _struct.0, field.0
+                translate_type(&field.1),
+                _struct.0,
+                field.0,
+                _struct.0,
+                field.0
             ));
         }
 
@@ -295,20 +358,23 @@ pub fn generate(graph: &SymbolGraph, file_name: &str, typed: &TypedIntermediate)
     }
 
     for func in &typed.functions {
-        if func.0.starts_with("__make_struct") || func.0.starts_with("__get_struct") {
+        if func.0.starts_with("__make_struct")
+            || func.0.starts_with("__get_struct")
+            || is_primitive_op_func(&func.0)
+        {
             continue;
         }
 
         if func.0 == "main" {
             for param in &func.1.parameters {
                 webgl.push_str(&format!(
-                    "in {} __in_{};\n",
+                    "uniform {} {};\n",
                     param.type_name.to_string(),
-                    param.name
+                    translate_identifier(&format!("__in_{}", param.name))
                 ));
             }
 
-            webgl.push_str("void main() {\n");
+            webgl.push_str("/*__SHADEUP_TEMPLATE_INSERT_MAIN_BEFORE__*/\nvoid main() {\n/*__SHADEUP_TEMPLATE_INSERT_MAIN_START__*/\n");
         } else {
             if func.1.tags.len() > 0 {
                 webgl.push_str(&format!(
@@ -323,19 +389,23 @@ pub fn generate(graph: &SymbolGraph, file_name: &str, typed: &TypedIntermediate)
             }
             webgl.push_str(&format!(
                 "{} {}({}) {{\n",
-                func.1.return_type.to_string(),
-                func.0,
+                translate_type(func.1.return_type.to_string().as_str()),
+                translate_identifier(func.0),
                 func.1
                     .parameters
                     .iter()
-                    .map(|arg| format!("{} {}", arg.type_name.to_string(), arg.name.clone()))
+                    .map(|arg| format!(
+                        "{} {}",
+                        translate_type(arg.type_name.to_string().as_str()),
+                        translate_identifier(&arg.name)
+                    ))
                     .collect::<Vec<String>>()
                     .join(", ")
             ));
         }
 
-        if func.1.javascript.is_some() {
-            webgl.push_str(&func.1.javascript.as_ref().unwrap());
+        if func.1.webgl.is_some() {
+            webgl.push_str(&func.1.webgl.as_ref().unwrap());
         } else {
             let idents_temp = func.1.parameters.clone();
             let idents = idents_temp
@@ -349,7 +419,7 @@ pub fn generate(graph: &SymbolGraph, file_name: &str, typed: &TypedIntermediate)
             webgl.push_str(&gen_body_local(graph, file_name, &body_mut));
         }
 
-        webgl.push_str("\n}\n");
+        webgl.push_str("\n/*__SHADEUP_TEMPLATE_INSERT_MAIN_END__*/\n}\n");
     }
 
     ProgramOutput { webgl }
@@ -377,6 +447,9 @@ fn rename_in_identifiers_expression(expr: &mut TypedExpression, idents: &Vec<&st
 }
 fn rename_in_identifiers_statement(statement: &mut TypedStatement, idents: &Vec<&str>) {
     match statement {
+        TypedStatement::Set(_, expr, _) => {
+            rename_in_identifiers_expression(expr, idents);
+        }
         TypedStatement::Expression(expr, _) => {
             rename_in_identifiers_expression(expr, idents);
         }
@@ -385,6 +458,7 @@ fn rename_in_identifiers_statement(statement: &mut TypedStatement, idents: &Vec<
         }
         TypedStatement::Let {
             name: _,
+            type_name,
             value,
             span: _,
         } => {

@@ -3,17 +3,18 @@
 	<head>
 		<title>Shadeup sandbox</title>
 		<script>
-			window.addEventListener('message', function (e) {
+			window.addEventListener('message', async function (e) {
 				var mainWindow = e.source;
 				var result = '';
 				try {
-					const postMessage = (v) => mainWindow.postMessage(v, event.origin);
+					const postMessage = (v) => mainWindow.postMessage(v, e.origin);
 					eval(e.data);
-					result = main__shadeup_main();
+					result = await main__shadeup_main();
 				} catch (e) {
+					console.error(e);
 					result = 'eval() threw an exception.';
 				}
-				mainWindow.postMessage(result, event.origin);
+				mainWindow.postMessage(result, e.origin);
 			});
 		</script>
 	</head>

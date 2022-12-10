@@ -21,13 +21,14 @@ export function loadWasm() {
 	return exp;
 }
 
-export default class ShadeupEnvironment {
+export default class ShadeupEnvironment extends EventTarget {
 	files: Map<string, string>;
 	alerts: Map<string, ShadeupAlert[]>;
 	env: any;
 	mod: any;
 
 	constructor() {
+		super();
 		this.files = new Map();
 		this.alerts = new Map();
 	}
@@ -109,6 +110,9 @@ export default class ShadeupEnvironment {
 	updateFile(filename: string, content: string) {
 		this.files.set(filename, content);
 		this.mod.set_file(this.env, filename, content);
+		setTimeout(() => {
+			this.dispatchEvent(new CustomEvent('change', { detail: filename }));
+		}, 0);
 	}
 
 	generateFile(filename: string): string {

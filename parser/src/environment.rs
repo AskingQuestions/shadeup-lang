@@ -313,6 +313,7 @@ impl Environment {
                             statements: vec![],
                         },
                         javascript: method.1.javascript.clone(),
+                        webgl: method.1.webgl.clone(),
                         name: method.0.clone(),
                         parameters: method
                             .1
@@ -345,6 +346,7 @@ impl Environment {
                         statements: vec![],
                     },
                     javascript: sym_func.javascript.clone(),
+                    webgl: sym_func.webgl.clone(),
                     name: _type.name.clone(),
                     parameters: sym_func
                         .parameters
@@ -386,15 +388,22 @@ impl Environment {
         let entry = "main".to_string();
         let real_entry = format!("{}_{}", name.replace(".", "__"), entry);
 
+        let mut shaken_typed = None;
         if let Some(_func) = typed.functions.get(&real_entry) {
-            typed = typed.tree_shake(&self.graph, name, &real_entry);
+            shaken_typed = Some(typed.tree_shake(&self.graph, name, &real_entry));
         }
 
         let mut generated = String::new();
 
         let file = self.files.get_mut(name).unwrap();
         if let Some(ref _ast_ref) = file.ast {
-            generated = crate::generator::generate(&self.graph, name, &typed).javascript;
+            generated = crate::generator::generate(
+                &self.graph,
+                name,
+                &typed,
+                shaken_typed.as_ref().unwrap_or(&typed),
+            )
+            .javascript;
         }
 
         return generated;
@@ -423,6 +432,9 @@ fn shift_shader_ids_expression(expr: &mut TypedExpression, by: usize) {
 fn shift_shader_ids_body(body: &mut TypedBody, by: usize) {
     for statement in body.statements.iter_mut() {
         match statement {
+            TypedStatement::Set(id, expr, _) => {
+                shift_shader_ids_expression(expr, by);
+            }
             TypedStatement::Expression(expr, _) => {
                 shift_shader_ids_expression(expr, by);
             }
@@ -432,6 +444,7 @@ fn shift_shader_ids_body(body: &mut TypedBody, by: usize) {
             TypedStatement::Let {
                 name: _,
                 value,
+                type_name,
                 span: _,
             } => {
                 shift_shader_ids_expression(value, by);

@@ -141,6 +141,7 @@ pub fn add_native_function(e: &mut environment::Environment, val: JsValue) {
         span: 0..0,
         definition: SymbolDefinition::Function(graph::SymbolFunction {
             javascript: Some(sym.js),
+            webgl: None,
             return_type: Some(sym.return_type),
             parameters: sym.parameters.clone(),
             span: 0..0,

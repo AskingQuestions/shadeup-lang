@@ -14,15 +14,19 @@
 		<h2 class="px-16 text-6xl text-gray-200 font-title font-bold">Test Suite</h2>
 	</secton>
 
-	<div class="mt-16">
+	<div class="mt-16 space-y-20">
 		{#each [...$tester.cases.keys()] as group}
-			<h2 class="px-16 mb-4 text-4xl font-bold text-gray-400 font-title capitalize">{group}</h2>
+			<div>
+				<h2 class="px-16 mb-4 text-4xl font-bold text-gray-400 font-title capitalize">{group}</h2>
 
-			<section class="space-y-4 px-8">
-				{#each $tester.cases.get(group) || [] as _case}
-					<TestCase instance={_case} />
-				{/each}
-			</section>
+				<section class="space-y-4 px-8">
+					{#each $tester.cases.get(group) || [] as _case}
+						<!-- {#if _case.name == 'sleep'} -->
+						<TestCase instance={_case} />
+						<!-- {/if} -->
+					{/each}
+				</section>
+			</div>
 		{/each}
 	</div>
 </main>

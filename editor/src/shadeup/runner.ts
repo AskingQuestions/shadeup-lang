@@ -25,7 +25,12 @@ export async function makeEnvironment(source: string, expose: ShadeupExternalSym
 export async function runEnvironmentLong(env: ShadeupEnvironment, cb: (message: any) => void) {
 	env.evaluate('main.shadeup');
 
+	let gid = (window as any).runLongId || 0;
+	(window as any).runLongId = gid + 1;
+
 	let js = env.generateFile('main.shadeup');
+
+	js = `let LONG_GID = ${gid};\n${js}`;
 
 	let iframe = document.createElement('iframe');
 	iframe.sandbox.add('allow-scripts');
@@ -34,8 +39,9 @@ export async function runEnvironmentLong(env: ShadeupEnvironment, cb: (message: 
 
 	let windowListener = (e: MessageEvent) => {
 		var frame = document.getElementById('sandboxed');
-		if (e.origin === 'null' && e.source === iframe.contentWindow) {
-			cb(e.data);
+		if (e.origin === 'null' && e.source === iframe.contentWindow && e.data && e.data.gid === gid) {
+			console.log(e.data);
+			cb(e.data.data);
 		}
 	};
 

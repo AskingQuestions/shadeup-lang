@@ -24,6 +24,7 @@
 	import { ShadeupExternalSymbol } from 'src/shadeup/symbol';
 	import type ShadeupEnvironment from 'src/shadeup/environment';
 	import MonacoEditor from '../editor/MonacoEditor.svelte';
+	import ShadeupEditor from '../editor/ShadeupEditor.svelte';
 
 	export let instance: TestCaseInstance;
 
@@ -67,13 +68,14 @@
 				['b', 'any', false]
 			],
 			`
-			console.log("assert", a,b);
-			postMessage({print: \`\${a} == \${b}\`, passed: a.toString() == b.toString()});
+			console.log("assert", a, b);
+			postMessage({gid: LONG_GID, data: {print: \`\${a} == \${b}\`, passed: a.toString() == b.toString()}});
 			`
 		)
 	];
 
 	let environment: ShadeupEnvironment | null = null;
+	let raw_js = '';
 
 	onMount(async () => {
 		environment = await makeEnvironment(instance.source, syms);
@@ -100,6 +102,7 @@
 		}
 
 		let kill = await runEnvironmentLong(environment, (message: any) => {
+			raw_js = environment.generateFile('main.shadeup');
 			if (message && message.print) {
 				instance.asserts.push(message);
 			} else {
@@ -167,7 +170,8 @@
 	{#if open}
 		<div class="panel mt-4" transition:slide>
 			{#if environment}
-				<MonacoEditor {environment} filename="main.shadeup" minimap={false} />
+				<ShadeupEditor {environment} filename="main.shadeup" minimap={false} />
+				<MonacoEditor source={raw_js} language="javascript" minimap={false} />
 			{:else}
 				<div class="h-20 bg-gray-900 flex justify-center items-center flex-col">
 					<Fa {icon} class="animate-spin text-2xl h-8 w-8 sm:h-10 sm:w-10" />
