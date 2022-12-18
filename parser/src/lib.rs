@@ -1,4 +1,5 @@
 pub mod ast;
+pub mod dep_graph;
 pub mod environment;
 pub mod generator;
 pub mod graph;

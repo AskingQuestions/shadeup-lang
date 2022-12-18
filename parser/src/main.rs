@@ -3,6 +3,7 @@ use std::{fs, time::Instant};
 use crate::environment::Environment;
 
 mod ast;
+mod dep_graph;
 mod environment;
 mod generator;
 mod graph;
@@ -16,7 +17,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     env.set_file(
         "other.shadeup".to_owned(),
-        " 
+        "
     "
         .to_string(),
     );

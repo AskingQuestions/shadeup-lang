@@ -1,4 +1,5 @@
-fn assert(a: any, b: any) -> void {}
-fn main() -> int {
-  sleep(1);
+fn main() {
+	let v = [1, 2, 3];
+
+	v.len();
 }

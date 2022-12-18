@@ -299,24 +299,64 @@ impl Environment {
             functions: HashMap::new(),
             structs: Vec::new(),
             shaders: Vec::new(),
+            globals: HashMap::new(),
         };
 
-        for (_, _type) in self.graph.primitive.iter() {
-            if let SymbolDefinition::Type(ref sym_type) = _type.definition {
-                for method in &sym_type.methods {
+        for (_, overloads) in self.graph.primitive.iter_all() {
+            for _type in overloads {
+                if let SymbolDefinition::Type(ref sym_type) = _type.definition {
+                    for method in &sym_type.methods {
+                        let func_typed = TypedFunction {
+                            tagged: true,
+                            tagging: false,
+                            tags: method.1.tags.clone(),
+                            body: TypedBody {
+                                tags: vec![],
+                                statements: vec![],
+                            },
+                            javascript: method.1.javascript.clone(),
+                            webgl: method.1.webgl.clone(),
+                            name: method.0.clone(),
+                            parameters: method
+                                .1
+                                .parameters
+                                .iter()
+                                .map(|(name, _type, _)| TypedFunctionParameter {
+                                    name: name.clone(),
+                                    default_value: None,
+                                    type_name: ExpandedType::from_string(&self.graph, name, _type),
+                                })
+                                .collect(),
+                            return_type: ExpandedType::from_string(
+                                &self.graph,
+                                name,
+                                method.1.return_type.as_ref().unwrap_or(&"void".to_string()),
+                            ),
+                        };
+                        typed.functions.insert(
+                            format!(
+                                "{}_method_{}{}",
+                                &_type.get_namespaced(),
+                                &method.0,
+                                method.1.get_overload_name()
+                            ),
+                            func_typed,
+                        );
+                    }
+                }
+                if let SymbolDefinition::Function(ref sym_func) = _type.definition {
                     let func_typed = TypedFunction {
                         tagged: true,
                         tagging: false,
-                        tags: method.1.tags.clone(),
+                        tags: sym_func.tags.clone(),
                         body: TypedBody {
                             tags: vec![],
                             statements: vec![],
                         },
-                        javascript: method.1.javascript.clone(),
-                        webgl: method.1.webgl.clone(),
-                        name: method.0.clone(),
-                        parameters: method
-                            .1
+                        javascript: sym_func.javascript.clone(),
+                        webgl: sym_func.webgl.clone(),
+                        name: _type.name.clone(),
+                        parameters: sym_func
                             .parameters
                             .iter()
                             .map(|(name, _type, _)| TypedFunctionParameter {
@@ -328,44 +368,18 @@ impl Environment {
                         return_type: ExpandedType::from_string(
                             &self.graph,
                             name,
-                            method.1.return_type.as_ref().unwrap_or(&"void".to_string()),
+                            sym_func.return_type.as_ref().unwrap_or(&"void".to_string()),
                         ),
                     };
-                    typed
-                        .functions
-                        .insert(format!("__{}_{}", &_type.name, &method.0), func_typed);
+                    typed.functions.insert(
+                        format!(
+                            "{}{}",
+                            &_type.get_namespaced(),
+                            sym_func.get_overload_name()
+                        ),
+                        func_typed,
+                    );
                 }
-            }
-            if let SymbolDefinition::Function(ref sym_func) = _type.definition {
-                let func_typed = TypedFunction {
-                    tagged: true,
-                    tagging: false,
-                    tags: sym_func.tags.clone(),
-                    body: TypedBody {
-                        tags: vec![],
-                        statements: vec![],
-                    },
-                    javascript: sym_func.javascript.clone(),
-                    webgl: sym_func.webgl.clone(),
-                    name: _type.name.clone(),
-                    parameters: sym_func
-                        .parameters
-                        .iter()
-                        .map(|(name, _type, _)| TypedFunctionParameter {
-                            name: name.clone(),
-                            default_value: None,
-                            type_name: ExpandedType::from_string(&self.graph, name, _type),
-                        })
-                        .collect(),
-                    return_type: ExpandedType::from_string(
-                        &self.graph,
-                        name,
-                        sym_func.return_type.as_ref().unwrap_or(&"void".to_string()),
-                    ),
-                };
-                typed
-                    .functions
-                    .insert(format!("{}", &_type.get_namespaced()), func_typed);
             }
         }
 
@@ -376,6 +390,7 @@ impl Environment {
                 typed.functions.extend(funcs);
                 typed.shaders.extend(_typed.shaders.clone());
                 typed.structs.extend(_typed.structs.clone());
+                typed.globals.extend(_typed.globals.clone());
             }
         }
 
@@ -386,11 +401,26 @@ impl Environment {
         }
 
         let entry = "main".to_string();
+        let init = "__init_file".to_string();
         let real_entry = format!("{}_{}", name.replace(".", "__"), entry);
+        let real_init = format!("{}_{}", name.replace(".", "__"), init);
+
+        let mut no_shake_owned = vec![real_entry.clone()];
+
+        for func_name in &typed.functions {
+            if func_name.0.ends_with("__init_file") {
+                no_shake_owned.push(func_name.0.clone());
+            }
+        }
+        let no_shake = no_shake_owned
+            .iter()
+            .map(|s| s.as_str())
+            .collect::<Vec<&str>>();
 
         let mut shaken_typed = None;
         if let Some(_func) = typed.functions.get(&real_entry) {
-            shaken_typed = Some(typed.tree_shake(&self.graph, name, &real_entry));
+            shaken_typed = Some(typed.tree_shake(&self.graph, name, no_shake));
+            // shaken_typed = Some(typed.clone());
         }
 
         let mut generated = String::new();

@@ -14,7 +14,7 @@
 					console.error(e);
 					result = 'eval() threw an exception.';
 				}
-				mainWindow.postMessage(result, e.origin);
+				mainWindow.postMessage({ gid: LONG_GID, data: result }, e.origin);
 			});
 		</script>
 	</head>

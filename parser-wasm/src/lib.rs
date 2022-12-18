@@ -146,6 +146,8 @@ pub fn add_native_function(e: &mut environment::Environment, val: JsValue) {
             parameters: sym.parameters.clone(),
             span: 0..0,
             tags: vec![],
+            method_of: None,
+            ..Default::default()
         }),
         root: ast::Root::Error,
     };

@@ -17,6 +17,14 @@ export async function makeEnvironment(source: string, expose: ShadeupExternalSym
 		env.addSymbol(sym);
 	}
 
+	env.updateFile(
+		'test.shadeup',
+		`let glob = 'Hi!';
+		let starter = 1.0;
+fn invert(val: float) -> float {return starter - val; }
+		fn get_global() -> string { return glob; }`
+	);
+	env.evaluate('test.shadeup');
 	env.updateFile('main.shadeup', source);
 
 	return env;
@@ -30,7 +38,7 @@ export async function runEnvironmentLong(env: ShadeupEnvironment, cb: (message: 
 
 	let js = env.generateFile('main.shadeup');
 
-	js = `let LONG_GID = ${gid};\n${js}`;
+	js = `window.LONG_GID = ${gid};\n${js}`;
 
 	let iframe = document.createElement('iframe');
 	iframe.sandbox.add('allow-scripts');

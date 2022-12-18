@@ -173,6 +173,7 @@ fn lexer() -> impl Parser<char, Vec<(Token, Span)>, Error = Simple<char>> {
         // 0th order
         just('%').to(Op::Rem),
         just('?').to(Op::Question),
+        just("::").to(Op::DoubleColon),
     )))
     .map(Token::Op);
 
@@ -289,6 +290,7 @@ fn assemble_op_list(my: &[(ast::Expression, Option<Op>, Span)]) -> ast::Expressi
             Op::RFlow,
             Op::LArrow,
             Op::RArrow,
+            Op::DoubleColon,
         ],
     ];
 
@@ -300,14 +302,14 @@ fn assemble_op_list(my: &[(ast::Expression, Option<Op>, Span)]) -> ast::Expressi
                 Box::new(my[0].0.clone()),
                 my[0].1.as_ref().unwrap().clone(),
                 Box::new(my[1].0.clone()),
-                my[0].2.clone(),
+                my[0].2.start..my[1].2.end,
             ))
         } else {
             ast::Expression::Op((
                 Box::new(my[0].0.clone()),
                 Op::Add,
                 Box::new(my[1].0.clone()),
-                my[0].2.clone(),
+                my[0].2.start..my[1].2.end,
             ))
         }
     } else if my.len() == 1 {
@@ -536,6 +538,7 @@ fn op_chain(
         just(Token::Op(Op::RFlow)).to(Op::RFlow),
         just(Token::Op(Op::LArrow)).to(Op::LArrow),
         just(Token::Op(Op::RArrow)).to(Op::RArrow),
+        just(Token::Op(Op::DoubleColon)).to(Op::DoubleColon),
     )));
 
     let expr = in_op
@@ -992,8 +995,11 @@ fn block_parser() -> impl Parser<Token, Vec<ast::Root>, Error = Simple<Token>> +
 
         let args = identifier
             .clone()
-            .then_ignore(just(Token::Ctrl(':')))
-            .then(identifier.clone())
+            .then(
+                just(Token::Ctrl(':'))
+                    .ignore_then(identifier.clone())
+                    .or_not(),
+            )
             .then(
                 just(Token::Op(Op::Eq))
                     .ignore_then(expression.clone())

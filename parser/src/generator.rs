@@ -1,13 +1,23 @@
+use std::collections::HashMap;
+
 use crate::graph::SymbolGraph;
 
 use crate::validator::{
-    TypedBody, TypedExpression, TypedIntermediate, TypedStatement, TypedTag, TypedTagType,
-    TypedValue,
+    propagate_tags, tag_function, TypedBody, TypedExpression, TypedIntermediate, TypedStatement,
+    TypedTag, TypedTagType, TypedValue,
 };
 use crate::webgl;
 
 pub struct ProgramOutput {
     pub javascript: String,
+}
+
+pub fn translate_identifier(file_name: &str, ident: &str) -> String {
+    if ident.starts_with("$") {
+        format!("window['_shadeup_file_globals_{}']", ident.replace("$", ""))
+    } else {
+        ident.to_string()
+    }
 }
 
 fn gen_expression_local(
@@ -29,7 +39,22 @@ fn gen_expression_local(
             TypedValue::Error => "/* !error value */".to_string(),
         },
         TypedExpression::Error() => "/* !error */".to_string(),
-        TypedExpression::Identifier(ident, _) => ident.clone(),
+        TypedExpression::List(exprs, _) => {
+            let mut args = String::new();
+
+            for arg in exprs {
+                args.push_str(&gen_expression_local(graph, file_name, typed, arg));
+                args.push_str(", ");
+            }
+
+            if args.len() > 0 {
+                args.pop();
+                args.pop();
+            }
+
+            format!("[{}]", args)
+        }
+        TypedExpression::Identifier(ident, _) => translate_identifier(file_name, &ident),
         TypedExpression::Call(call, exprs, span) => {
             let func = typed.get_function(call);
 
@@ -38,7 +63,7 @@ fn gen_expression_local(
                 let ops = vec![("join", "++"), ("minus_minus", "--")];
 
                 for (name, op) in ops {
-                    if call.ends_with(format!("__prefix_operator_{}", name).as_str()) {
+                    if call.contains(format!("__prefix_operator_{}", name).as_str()) {
                         return format!(
                             "({}{})",
                             op,
@@ -51,7 +76,7 @@ fn gen_expression_local(
                 let ops = vec![("join", "++"), ("minus_minus", "--")];
 
                 for (name, op) in ops {
-                    if call.ends_with(format!("__postfix_operator_{}", name).as_str()) {
+                    if call.contains(format!("__postfix_operator_{}", name).as_str()) {
                         return format!(
                             "({}{})",
                             gen_expression_local(graph, file_name, typed, &exprs[0]),
@@ -126,14 +151,30 @@ fn gen_expression_local(
             format!("{{{}}}", entries)
         }
         TypedExpression::Shader(inst, _) => {
+            let shader_globals = typed.shaders.get(inst.shader).unwrap();
+            let mut params = inst
+                .closure
+                .iter()
+                .map(|(name, _)| {
+                    format!(
+                        "{}: {}",
+                        name.replace("$", ""),
+                        translate_identifier(file_name, name)
+                    )
+                })
+                .collect::<Vec<String>>();
+            for (name, value) in &shader_globals.globals {
+                params.push(format!(
+                    "global_{}: window['_shadeup_file_globals_{}']",
+                    name.replace("$", ""),
+                    name.replace("$", "")
+                ));
+            }
+
             format!(
                 "__SHADERS[{}].instance({{{}}})",
                 inst.shader,
-                inst.closure
-                    .iter()
-                    .map(|(name, _)| format!("{}", name))
-                    .collect::<Vec<String>>()
-                    .join(", ")
+                params.join(", ")
             )
         }
     }
@@ -149,7 +190,7 @@ fn gen_statement_local(
         TypedStatement::Set(id, expr, _) => {
             format!(
                 "{} = {};\n",
-                id,
+                translate_identifier(file_name, id),
                 gen_expression_local(graph, file_name, typed, &expr)
             )
         }
@@ -311,7 +352,7 @@ pub fn generate(
     graph: &SymbolGraph,
     file_name: &str,
     full_typed: &TypedIntermediate,
-    typed: &TypedIntermediate,
+    typed_source: &TypedIntermediate,
 ) -> ProgramOutput {
     let mut javascript = String::new();
     let file = graph.files.get(file_name);
@@ -320,17 +361,38 @@ pub fn generate(
 
     javascript.push_str(&format!("const __SHADERS = [\n"));
 
-    for shader in &typed.shaders {
-        let shaken = full_typed.tree_shake_shader(graph, file_name, shader.clone());
+    let mut typed = typed_source.clone();
+
+    for (i, shader) in typed_source.shaders.iter().enumerate() {
+        let mut shaken = full_typed.tree_shake_shader(graph, file_name, shader.clone());
+        tag_function(&mut shaken, "main");
+
+        let mut params = shader
+            .parameters
+            .iter()
+            .map(|p| format!("{}: '{}'", p.0, p.1))
+            .collect::<Vec<String>>();
+
+        let mut globals = HashMap::new();
+
+        for tag in shaken.get_function("main").unwrap().tags.iter() {
+            if tag.tag == TypedTagType::GlobalVariableAccess {
+                if let Some(type_name) = full_typed.globals.get(&tag.type_name) {
+                    globals.insert(tag.type_name.clone(), type_name.clone());
+                    params.push(format!("global_{}: '{}'", tag.type_name, type_name));
+                } else {
+                    dbg!(&tag.type_name);
+                }
+            }
+        }
+
+        let mut shade = typed.shaders.get_mut(i).unwrap();
+        shade.globals = globals;
+
         javascript.push_str(&format!(
             "  __shadeup_gen_shader({{{}}}, `{}`),\n",
-            shader
-                .parameters
-                .iter()
-                .map(|p| format!("{}: '{}'", p.0, p.1))
-                .collect::<Vec<String>>()
-                .join(", "),
-            webgl::generate(graph, file_name, &shaken).webgl
+            params.join(", "),
+            webgl::generate(graph, file_name, shade, &shaken).webgl
         ));
     }
 
@@ -408,7 +470,7 @@ pub fn generate(
         if func.1.javascript.is_some() {
             javascript.push_str(&func.1.javascript.as_ref().unwrap());
         } else {
-            javascript.push_str(&gen_body_local(graph, file_name, typed, &func.1.body));
+            javascript.push_str(&gen_body_local(graph, file_name, &typed, &func.1.body));
         }
 
         if func.1.has_tag(&TypedTagType::Throws) {
@@ -418,6 +480,14 @@ pub fn generate(
         }
 
         javascript.push_str("\n}\n\n");
+        javascript.push_str(
+            format!(
+                "window['{}'] = {};\n",
+                crate::graph::translate_path_to_safe_name(func.0),
+                func.0
+            )
+            .as_str(),
+        );
     }
 
     ProgramOutput { javascript }

@@ -19,16 +19,24 @@
 
 	onMount(async () => {
 		env = await makeEnvironment(
-			`fn main() {
+			`
+import invert from "test.shadeup";
+
+let g = 0.01;
+
+fn main() {
+    g = g + 0.01;
+    if (g > 1) { g = 0; }
 	let y = 123;
 	let x = shader {
-		y + 1;
+		pixel = (invert(g), 1, 2, 3);
 	};
 
 	draw(x);
 }`,
 			[]
 		);
+
 		env.addEventListener('change', handleSourceChange);
 	});
 </script>

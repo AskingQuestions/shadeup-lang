@@ -78,9 +78,40 @@ pub struct StringLiteral {
 pub struct Function {
     pub name: Identifier,
     pub body: Block,
-    pub parameters: Vec<(Identifier, Identifier, Option<Expression>)>,
+    pub parameters: Vec<(Identifier, Option<Identifier>, Option<Expression>)>,
     pub return_type: Option<Identifier>,
     pub span: Span,
+}
+
+pub struct AstWalker<'a> {
+    pub root: Option<Box<dyn FnMut(&Root) + 'a>>,
+    pub block: Option<Box<dyn FnMut(&Block) + 'a>>,
+    pub expression: Option<Box<dyn FnMut(&Block) + 'a>>,
+    pub identifier: Option<Box<dyn FnMut(&Identifier) + 'a>>,
+    pub function: Option<Box<dyn FnMut(&Function) + 'a>>,
+    pub shader: Option<Box<dyn FnMut(&Block) + 'a>>,
+}
+
+impl<'a> AstWalker<'a> {
+    pub fn new() -> AstWalker<'a> {
+        AstWalker {
+            root: None,
+            block: None,
+            expression: None,
+            identifier: None,
+            function: None,
+            shader: None,
+        }
+    }
+}
+
+impl Function {
+    pub fn walk(&self, walker: &mut AstWalker) {
+        if let Some(ref mut f) = walker.function {
+            f(self);
+        }
+        self.body.walk(walker);
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -173,6 +204,64 @@ impl Root {
             Root::Error => Span { start: 0, end: 0 },
         }
     }
+
+    pub fn walk(&self, walker: &mut AstWalker) {
+        match self {
+            Root::Function(f) => f.walk(walker),
+            Root::Main(b) => {}
+            Root::Shader(b) => {
+                if let Some(ref mut f) = walker.shader {
+                    f(b);
+                }
+            }
+            Root::Expression(e) => e.walk(walker),
+            Root::Struct(s) => {}
+            Root::Impl(i) => {
+                for r in &i.body {
+                    r.walk(walker);
+                }
+            }
+            Root::If(i) => {
+                i.condition.walk(walker);
+                i.body.walk(walker);
+                if let Some(ref else_) = i.else_body {
+                    else_.walk(walker);
+                }
+                for e in &i.else_ifs {
+                    e.body.walk(walker);
+                    e.condition.walk(walker);
+                }
+            }
+            Root::Let(l) => {
+                if let Some(ref e) = l.to {
+                    e.walk(walker);
+                }
+            }
+            Root::Return(r) => {
+                if let Some(ref e) = r.value {
+                    e.walk(walker);
+                }
+            }
+            Root::ForEach(f) => {
+                f.body.walk(walker);
+                f.iterable.walk(walker);
+            }
+            Root::For(f) => {
+                f.body.walk(walker);
+                f.first.walk(walker);
+                f.second.walk(walker);
+                f.third.walk(walker);
+            }
+            Root::While(w) => {
+                w.body.walk(walker);
+                w.condition.walk(walker);
+            }
+            Root::Break(_) => {}
+            Root::Continue(_) => {}
+            Root::Error => {}
+            _ => {}
+        }
+    }
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -216,6 +305,54 @@ impl Expression {
             Expression::StructInstance((_, _, span)) => span.clone(),
         }
     }
+
+    pub fn walk(&self, walker: &mut AstWalker) {
+        match self {
+            Expression::Identifier(ident) => {
+                if let Some(ref mut f) = walker.identifier {
+                    f(&ident.0);
+                }
+            }
+            Expression::List((l, _)) => {
+                for e in l {
+                    e.walk(walker);
+                }
+            }
+            Expression::Value((_, _)) => {}
+            Expression::Call((c, _)) => {
+                c.expression.walk(walker);
+                for e in &c.args {
+                    e.walk(walker);
+                }
+            }
+            Expression::Op((l, _, r, _)) => {
+                l.walk(walker);
+                r.walk(walker);
+            }
+            Expression::Error((_, _)) => {}
+            Expression::InlineBlock((b, _)) => {
+                if let Some(ref mut f) = walker.shader {
+                    f(b);
+                }
+                b.walk(walker);
+            }
+            Expression::Ternary((c, t, f, _)) => {
+                c.walk(walker);
+                t.walk(walker);
+                f.walk(walker);
+            }
+            Expression::Tuple((l, _)) => {
+                for e in l {
+                    e.walk(walker);
+                }
+            }
+            Expression::StructInstance((_, l, _)) => {
+                for (_, e) in l {
+                    e.walk(walker);
+                }
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -251,6 +388,7 @@ pub enum Op {
     PlusEq,
     MinusEq,
     Question,
+    DoubleColon,
     Sq,
     AndAnd,
     And,
@@ -289,6 +427,7 @@ impl fmt::Display for Op {
             Op::SubSub => write!(f, "--"),
             Op::Sq => write!(f, "**"),
             Op::Question => write!(f, "?"),
+            Op::DoubleColon => write!(f, "::"),
             Op::AndAnd => write!(f, "&&"),
             Op::And => write!(f, "&"),
             Op::Bar => write!(f, "|"),
@@ -328,6 +467,7 @@ impl Op {
             Op::MinusEq => "minus_equals".to_string(),
             Op::Sq => "double_multiply".to_string(),
             Op::Question => "question".to_string(),
+            Op::DoubleColon => "double_colon".to_string(),
             Op::AndAnd => "and_and".to_string(),
             Op::And => "and".to_string(),
             Op::Bar => "bar".to_string(),
@@ -415,4 +555,16 @@ pub struct Import {
 pub struct Block {
     pub span: Span,
     pub roots: Vec<Root>,
+}
+
+impl Block {
+    pub fn walk(&self, walker: &mut AstWalker) {
+        if let Some(ref mut f) = walker.block {
+            f(self);
+        }
+
+        for root in &self.roots {
+            root.walk(walker);
+        }
+    }
 }
