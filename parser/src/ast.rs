@@ -283,6 +283,7 @@ pub enum Expression {
     Tuple((Vec<Expression>, Span)),
     Value((Value, Span)),
     Call((Call, Span)),
+    Index((Box<Expression>, Box<Expression>, Span)),
     Ternary((Box<Expression>, Box<Expression>, Box<Expression>, Span)),
     Op((Box<Expression>, Op, Box<Expression>, Span)),
     InlineBlock((Block, Span)),
@@ -303,6 +304,7 @@ impl Expression {
             Expression::Ternary((_, _, _, span)) => span.clone(),
             Expression::Tuple((_, span)) => span.clone(),
             Expression::StructInstance((_, _, span)) => span.clone(),
+            Expression::Index((_, _, span)) => span.clone(),
         }
     }
 
@@ -350,6 +352,10 @@ impl Expression {
                 for (_, e) in l {
                     e.walk(walker);
                 }
+            }
+            Expression::Index((e, i, _)) => {
+                e.walk(walker);
+                i.walk(walker);
             }
         }
     }

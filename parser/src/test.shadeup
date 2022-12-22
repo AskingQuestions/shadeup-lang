@@ -1,5 +1,15 @@
-fn main() {
-	let v = [1, 2, 3];
+struct Player {
+	name: string,
+	health: int
+}
 
-	v.len();
+fn main() {
+	let p = Player{
+		name: "Player",
+		health: 100.2,
+	};
+
+	let v = [p];
+
+	print(v[0].name);
 }

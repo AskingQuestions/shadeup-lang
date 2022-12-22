@@ -773,7 +773,7 @@ fn block_parser() -> impl Parser<Token, Vec<ast::Root>, Error = Simple<Token>> +
                 // 'Atoms' are expressions that contain no ambiguity
                 let atom = val
                     .map_with_span(|val, span| ast::Expression::Value((val, span)))
-                    .or(struct_def)
+                    .or(struct_def.clone())
                     .or(identifier
                         .clone()
                         .map(|id| ast::Expression::Identifier((id.clone(), id.span))))
@@ -850,13 +850,14 @@ fn block_parser() -> impl Parser<Token, Vec<ast::Root>, Error = Simple<Token>> +
                         });
 
                 // Function calls have very high precedence so we prioritise them
-                let ident_expr = identifier
+                let ident_expr = struct_def.clone().or(identifier
                     .clone()
-                    .map(|id| ast::Expression::Identifier((id.clone(), id.span)));
+                    .map(|id| ast::Expression::Identifier((id.clone(), id.span))));
                 let call = ident_expr
                     .clone()
                     .then(
                         items
+                            .clone()
                             .delimited_by(just(Token::Ctrl('(')), just(Token::Ctrl(')')))
                             .map_with_span(|args, span: Span| (args, span))
                             .repeated(),
@@ -955,7 +956,38 @@ fn block_parser() -> impl Parser<Token, Vec<ast::Root>, Error = Simple<Token>> +
                         ast::Expression::Op((Box::new(a), op, Box::new(b), span))
                     });
 
-                let bar_bar = op_chain(call_dot_chain);
+                let index = call_dot_chain
+                    .clone()
+                    .then(
+                        call_dot_chain
+                            .delimited_by(just(Token::Ctrl('[')), just(Token::Ctrl(']')))
+                            .or_not(),
+                    )
+                    .map_with_span(|(left, right), span| {
+                        if let Some(right) = right {
+                            ast::Expression::Index((Box::new(left), Box::new(right), span))
+                        } else {
+                            left
+                        }
+                    });
+
+                let index_dot_chain = index
+                    .clone()
+                    .then(
+                        op.clone()
+                            .then(index.clone().or(atom.clone()).or_not().map_with_span(
+                                |val, span| match val {
+                                    Some(val) => val,
+                                    None => ast::Expression::Error(((), span)),
+                                },
+                            ))
+                            .repeated(),
+                    )
+                    .foldl(|a, (op, b)| {
+                        let span = a.get_span().start..b.get_span().end;
+                        ast::Expression::Op((Box::new(a), op, Box::new(b), span))
+                    });
+                let bar_bar = op_chain(index_dot_chain);
 
                 // Sum ops (add and subtract) have equal precedence
 
@@ -1328,7 +1360,8 @@ fn block_parser() -> impl Parser<Token, Vec<ast::Root>, Error = Simple<Token>> +
             .then(
                 _struct_field
                     .clone()
-                    .repeated()
+                    .separated_by(just(Token::Ctrl(',')))
+                    .allow_trailing()
                     .delimited_by(just(Token::Ctrl('{')), just(Token::Ctrl('}')))
                     // Attempt to recover anything that looks like a function body but contains errors
                     .recover_with(nested_delimiters(

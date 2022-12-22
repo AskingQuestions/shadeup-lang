@@ -321,8 +321,8 @@ impl Environment {
                                 .1
                                 .parameters
                                 .iter()
-                                .map(|(name, _type, _)| TypedFunctionParameter {
-                                    name: name.clone(),
+                                .map(|(pname, _type, _)| TypedFunctionParameter {
+                                    name: pname.clone(),
                                     default_value: None,
                                     type_name: ExpandedType::from_string(&self.graph, name, _type),
                                 })

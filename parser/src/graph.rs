@@ -4,7 +4,7 @@ use wasm_bindgen::prelude::*;
 
 use crate::ast::{self, Location, Span, USizeTuple};
 use crate::printer::SpannedAlert;
-use crate::validator::{TypedTag, TypedTagType};
+use crate::validator::{ExpandedType, TypedTag, TypedTagType};
 use multimap::MultiMap;
 use std::collections::HashMap;
 
@@ -47,7 +47,13 @@ impl SymbolFunction {
         let mut name = String::new();
 
         for (_, type_name, _) in &self.parameters {
-            name.push_str(&format!("_{}", type_name.clone()));
+            let expanded = crate::validator::ExpandedType::from_string_raw(type_name);
+            if expanded.name.starts_with("!") {
+                let after_stuff = expanded.name[1..].to_string();
+                name.push_str(&format!("_T{}", after_stuff));
+            } else {
+                name.push_str(&format!("_{}", expanded.to_safe_string()));
+            }
         }
 
         name
@@ -1382,14 +1388,14 @@ impl SymbolGraph {
             "array",
             vec![
                 (
-                    "__operator_index".to_string(),
+                    "__index".to_string(),
                     SymbolFunction {
                         span: 0..0,
                         parameters: vec![
-                            ("__this".to_owned(), "array".to_string(), false),
+                            ("__this".to_owned(), "array<any>".to_string(), false),
                             ("index".to_owned(), "int".to_string(), false),
                         ],
-                        return_type: Some("any".to_string()),
+                        return_type: Some("!0".to_string()),
                         javascript: Some(format!("return __this[index];")),
                         webgl: Some(format!("return __this[index];")),
                         tags: Vec::new(),
@@ -1398,15 +1404,15 @@ impl SymbolGraph {
                     },
                 ),
                 (
-                    "__operator_index_set".to_string(),
+                    "__index_set".to_string(),
                     SymbolFunction {
                         span: 0..0,
                         parameters: vec![
-                            ("__this".to_owned(), "array".to_string(), false),
+                            ("__this".to_owned(), "array<any>".to_string(), false),
                             ("index".to_owned(), "int".to_string(), false),
-                            ("value".to_owned(), "any".to_string(), false),
+                            ("value".to_owned(), "!0".to_string(), false),
                         ],
-                        return_type: None,
+                        return_type: Some("void".to_string()),
                         javascript: Some(format!("__this[index] = value;")),
                         webgl: Some(format!("__this[index] = value;")),
                         tags: Vec::new(),
@@ -1418,7 +1424,7 @@ impl SymbolGraph {
                     "push".to_string(),
                     SymbolFunction {
                         parameters: vec![
-                            ("__this".to_owned(), "array".to_string(), false),
+                            ("__this".to_owned(), "array<any>".to_string(), false),
                             ("value".to_owned(), "!0".to_string(), false),
                         ],
                         return_type: None,
@@ -1430,9 +1436,9 @@ impl SymbolGraph {
                 (
                     "len".to_string(),
                     SymbolFunction {
-                        parameters: vec![("__this".to_owned(), "array".to_string(), false),],
+                        parameters: vec![("__this".to_owned(), "array<any>".to_string(), false),],
                         return_type: Some("int".to_string()),
-                        javascript: Some(format!("__this.length")),
+                        javascript: Some(format!("return __this.length")),
                         webgl: Some(format!("/* !error */")),
                         ..Default::default()
                     },

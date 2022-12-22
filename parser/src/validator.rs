@@ -778,7 +778,7 @@ fn check_type_local<'a>(
     graph: &'a SymbolGraph,
     file_name: &str,
     name: &ast::Identifier,
-) -> Option<&'a SymbolType> {
+) -> (Option<&'a SymbolType>, Option<&'a SymbolNode>) {
     let primitive = graph.primitive.get(&name.name);
 
     if primitive.is_some() {
@@ -788,7 +788,7 @@ fn check_type_local<'a>(
             } else {
                 unreachable!()
             };
-        return Some(inner_wrap);
+        return (Some(inner_wrap), primitive);
     }
 
     let file = graph.files.get(file_name).unwrap();
@@ -808,14 +808,14 @@ fn check_type_local<'a>(
             ),
         ));
 
-        return None;
+        return (None, None);
     }
 
     if symbol.is_some() {
         let symbol = symbol.unwrap();
 
         if let SymbolDefinition::Type(def_type) = &symbol.definition {
-            return Some(def_type);
+            return (Some(def_type), Some(symbol));
         } else {
             _context.alerts.push(SpannedAlert::error(
                 "Expected a type".to_string(),
@@ -830,11 +830,11 @@ fn check_type_local<'a>(
                 ),
             ));
 
-            return None;
+            return (None, None);
         }
     }
 
-    None
+    (None, None)
 }
 
 fn check_method_local<'a>(
@@ -881,11 +881,9 @@ fn check_method_local<'a>(
 
                 let arg = &args[i];
 
-                if !arg.is_compatible_with(&ExpandedType::from_string(
-                    graph,
-                    file_name,
-                    param.1.as_str(),
-                )) {
+                let param_type = ExpandedType::from_string(graph, file_name, param.1.as_str());
+
+                if !arg.is_compatible_with(&param_type) {
                     compatible = false;
                     // _context.alerts.push(SpannedAlert::error(
                     //     "Invalid argument type".to_string(),
@@ -897,15 +895,16 @@ fn check_method_local<'a>(
             }
 
             if compatible {
-                return (
-                    method
-                        .1
-                        .return_type
-                        .clone()
-                        .unwrap_or("void".to_owned())
-                        .clone(),
-                    Some(&method.1),
-                );
+                let mut return_type = method
+                    .1
+                    .return_type
+                    .clone()
+                    .unwrap_or("void".to_owned())
+                    .clone();
+                if return_type.starts_with("!") {
+                    return_type = _generics[return_type[1..].parse::<usize>().unwrap()].to_string();
+                }
+                return (return_type, Some(&method.1));
             }
         }
     }
@@ -1026,16 +1025,24 @@ pub fn match_method<'a>(
     file_name: &str,
     intermediate: &mut TypedIntermediate,
     symbol: &'a SymbolType,
-    symbol_name: &str,
+    symbol_expanded: &ExpandedType,
     method_name: &str,
-    args: &Vec<ExpandedType>,
+    args_base: &Vec<ExpandedType>,
+    span: &Span,
 ) -> Option<(&'a str, &'a SymbolFunction)> {
+    let mut args = Vec::new();
+    args.extend_from_slice(args_base);
+    let mut missed = Vec::new();
     for method in &symbol.methods {
-        if method.0 == method_name || (symbol_name == method_name && method.0 == "__construct") {
+        if method.0 == method_name
+            || (symbol_expanded.name == method_name && method.0 == "__construct")
+        {
             let mut compatible = true;
             if args.len() > method.1.parameters.len() {
                 compatible = false;
             }
+
+            let mut expected = Vec::new();
 
             for (i, param) in method.1.parameters.iter().enumerate() {
                 if i >= args.len() {
@@ -1048,16 +1055,72 @@ pub fn match_method<'a>(
                 }
 
                 let arg = &args[i];
-                let param_type = ExpandedType::from_string(graph, file_name, param.1.as_str());
-                if !arg.is_compatible_with(&param_type) {
+                let expanded_raw = ExpandedType::from_string(graph, file_name, param.1.as_str());
+                let param_type = if param.1.starts_with("!") {
+                    let index = (param.1[1..]).parse::<usize>().unwrap();
+                    symbol_expanded.generics.get(index).unwrap()
+                } else {
+                    &expanded_raw
+                };
+
+                if i > 0 {
+                    expected.push(param_type.to_string());
+                }
+
+                if !arg.is_compatible_with(param_type) {
                     compatible = false;
                 }
             }
 
             if compatible {
                 return Some((&method.0, &method.1));
+            } else {
+                missed.push((method, expected));
             }
         }
+    }
+
+    if (missed.len() == 1) {
+        let method = &missed[0];
+        let expected = &method.1;
+        let got = args
+            .iter()
+            .skip(1)
+            .map(|x| x.to_string())
+            .collect::<Vec<String>>();
+        _context.alerts.push(SpannedAlert::error(
+            "Argument mismatch".to_string(),
+            format!(
+                "'{}::{}' expected ({}), but got ({})",
+                symbol_expanded.name,
+                method.0 .0,
+                expected.join(", "),
+                got.join(", ")
+            ),
+            Location::new(file_name.to_string(), USizeTuple(span.start, span.end)),
+        ));
+    } else if missed.len() > 1 {
+        let method = &missed[0];
+        let got = args.iter().map(|x| x.to_string()).collect::<Vec<String>>();
+        _context.alerts.push(SpannedAlert::error(
+            "No overload".to_string(),
+            format!(
+                "'{}::{}' has no overload that matches the given arguments {}",
+                symbol_expanded.name,
+                method.0 .0,
+                got.join(", ")
+            ),
+            Location::new(file_name.to_string(), USizeTuple(span.start, span.end)),
+        ));
+    } else {
+        _context.alerts.push(SpannedAlert::error(
+            "No method".to_string(),
+            format!(
+                "'{}' has no method named: '{}'",
+                symbol_expanded.name, method_name,
+            ),
+            Location::new(file_name.to_string(), USizeTuple(span.start, span.end)),
+        ));
     }
 
     None
@@ -1209,7 +1272,7 @@ pub fn get_call_local(
                 }
             }
 
-            param_types.push_str(&format!("_{}", param.to_string()));
+            param_types.push_str(&format!("_{}", param.to_safe_string()));
 
             let (arg_type_string, typed_arg) = get_type_local(
                 _context,
@@ -1276,6 +1339,11 @@ pub fn get_call_local(
                 );
 
                 typed_args.push(self_typed);
+                args.push(ExpandedType::from_string(
+                    graph,
+                    file_name,
+                    &self_arg_type_string,
+                ));
 
                 for arg in &call.args {
                     let (arg_type_string, typed_arg) =
@@ -1292,9 +1360,10 @@ pub fn get_call_local(
                     file_name,
                     intermediate,
                     symbol,
-                    &func_type.name,
+                    &func_type,
                     &method_name.name,
                     &args,
+                    &call.span,
                 ) {
                     if real_method_name == "__construct" {
                         typed_args.remove(0);
@@ -1317,29 +1386,27 @@ pub fn get_call_local(
                                 .into_iter()
                                 .enumerate()
                                 .map(|(i, x)| {
-                                    ExpandedType::from_string(
+                                    let param_type_name = &method_symbol.parameters[i].1;
+                                    let expanded_raw = ExpandedType::from_string(
                                         graph,
                                         file_name,
-                                        &method_symbol.parameters[i].1,
-                                    )
-                                    .wrap_cast(&args[i], x)
+                                        param_type_name,
+                                    );
+                                    let param_type = if param_type_name.starts_with("!") {
+                                        let index =
+                                            (param_type_name[1..]).parse::<usize>().unwrap();
+                                        func_type.generics.get(index).unwrap()
+                                    } else {
+                                        &expanded_raw
+                                    };
+                                    param_type.wrap_cast(&args[i], x)
                                 })
                                 .collect(),
                             call.span.clone(),
                         ),
                     )
                 } else {
-                    _context.alerts.push(SpannedAlert::error(
-                        "No method".to_string(),
-                        format!(
-                            "'{}' has no method named '{}'",
-                            func_type.name, method_name.name
-                        ),
-                        Location::new(
-                            file_name.to_string(),
-                            USizeTuple(call.span.start, call.span.end),
-                        ),
-                    ));
+                    // Error reporting is handled in the match_method function
                     ("!error".to_string(), TypedExpression::Error())
                 }
             } else {
@@ -1557,8 +1624,8 @@ pub fn get_type_local(
                 intermediate,
                 &matched_expr,
             );
-            let func_symbol = graph.get_symbol_node_in_file(file_name, &func_type);
             let func_type = ExpandedType::from_string(graph, file_name, &func_type);
+            let func_symbol = graph.get_symbol_node_in_file(file_name, &func_type.name);
             if let Some(func_symbol) = func_symbol {
                 get_call_local(
                     _context,
@@ -1645,8 +1712,8 @@ pub fn get_type_local(
                 TypedExpression::Shader(shader_inst, block.span.clone()),
             )
         }
-        ast::Expression::StructInstance((ident, args, _)) => {
-            let checked_type = check_type_local(_context, graph, file_name, ident);
+        ast::Expression::StructInstance((ident, args, struct_span)) => {
+            let (checked_type, _) = check_type_local(_context, graph, file_name, ident);
             if checked_type.is_some() {
                 let symbol = graph
                     .files
@@ -1654,42 +1721,113 @@ pub fn get_type_local(
                     .unwrap()
                     .get(&ident.name)
                     .unwrap();
-                (
-                    ident.name.clone(),
-                    TypedExpression::Call(
-                        format!("__make_struct_{}", symbol.get_namespaced()),
-                        vec![TypedExpression::KVMap(
-                            args.iter()
-                                .map(|arg| {
-                                    let (expr_type, arg_typed) = get_type_local(
-                                        _context,
-                                        scope,
-                                        graph,
-                                        file_name,
-                                        intermediate,
-                                        &arg.1,
-                                    );
 
-                                    (
-                                        arg.0.name.clone(),
-                                        ExpandedType::from_string(graph, file_name, &expr_type)
-                                            .wrap_cast(
-                                                &ExpandedType::from_string(
-                                                    graph,
-                                                    file_name,
-                                                    &arg.0.name,
+                if let SymbolDefinition::Type(ref _type) = symbol.definition {
+                    for arg in args {
+                        let field = _type.fields.iter().find(|field| field.0 == arg.0.name);
+                        if field.is_none() {
+                            _context.alerts.push(SpannedAlert::error(
+                                "Invalid type".to_string(),
+                                format!(
+                                    "Field {} does not exist on type {}",
+                                    arg.0.name, ident.name
+                                ),
+                                Location::new(
+                                    file_name.to_string(),
+                                    USizeTuple(arg.0.span.start, arg.0.span.end),
+                                ),
+                            ));
+                        } else {
+                            let field_type =
+                                ExpandedType::from_string(graph, file_name, &field.unwrap().1);
+
+                            let (arg_type, arg_typed) = get_type_local(
+                                _context,
+                                scope,
+                                graph,
+                                file_name,
+                                intermediate,
+                                &arg.1,
+                            );
+
+                            if !field_type.is_compatible_with(&ExpandedType::from_string(
+                                graph, file_name, &arg_type,
+                            )) {
+                                _context.alerts.push(SpannedAlert::error(
+                                    "Invalid type".to_string(),
+                                    format!(
+                                        "Field {} is of type {} but was given {}",
+                                        arg.0.name, field_type.name, arg_type
+                                    ),
+                                    Location::new(
+                                        file_name.to_string(),
+                                        USizeTuple(arg.0.span.start, arg.0.span.end),
+                                    ),
+                                ));
+                            }
+                        }
+                    }
+                    (
+                        ident.name.clone(),
+                        TypedExpression::Call(
+                            format!("__make_struct_{}", symbol.get_namespaced()),
+                            vec![TypedExpression::KVMap(
+                                args.iter()
+                                    .map(|arg| {
+                                        if let Some(field) =
+                                            _type.fields.iter().find(|field| field.0 == arg.0.name)
+                                        {
+                                            let (expr_type, arg_typed) = get_type_local(
+                                                _context,
+                                                scope,
+                                                graph,
+                                                file_name,
+                                                intermediate,
+                                                &arg.1,
+                                            );
+
+                                            (
+                                                arg.0.name.clone(),
+                                                ExpandedType::from_string(
+                                                    graph, file_name, &field.1,
+                                                )
+                                                .wrap_cast(
+                                                    &ExpandedType::from_string(
+                                                        graph, file_name, &expr_type,
+                                                    ),
+                                                    arg_typed,
                                                 ),
-                                                arg_typed,
-                                            ),
-                                    )
-                                })
-                                .collect(),
+                                            )
+                                        } else {
+                                            ("error".to_owned(), TypedExpression::Error())
+                                        }
+                                    })
+                                    .collect(),
+                                ident.span.clone(),
+                            )],
                             ident.span.clone(),
-                        )],
-                        ident.span.clone(),
-                    ),
-                )
+                        ),
+                    )
+                } else {
+                    _context.alerts.push(SpannedAlert::error(
+                        "Invalid type".to_string(),
+                        format!("Expected type, got something else"),
+                        Location::new(
+                            file_name.to_string(),
+                            USizeTuple(struct_span.start, struct_span.end),
+                        ),
+                    ));
+                    ("!error".to_owned(), TypedExpression::Error())
+                }
             } else {
+                _context.alerts.push(SpannedAlert::error(
+                    "Undefined type".to_string(),
+                    format!("Type {} is not defined", ident.name),
+                    Location::new(
+                        file_name.to_string(),
+                        USizeTuple(ident.span.start, ident.span.end),
+                    ),
+                ));
                 ("!error".to_owned(), TypedExpression::Error())
             }
         }
@@ -1711,6 +1849,7 @@ pub fn get_type_local(
                         span: lhs.get_span(),
                     },
                 )
+                .0
             };
 
             if let Op::Dot = op {
@@ -1948,7 +2087,7 @@ pub fn get_type_local(
                 let (rhs_type, rhs_typed_expr) =
                     get_type_local(_context, scope, graph, file_name, intermediate, rhs);
                 let rhs_type = ExpandedType::from_string(graph, file_name, &rhs_type);
-                let rhs_symbol = check_type_local(
+                let (rhs_symbol, _) = check_type_local(
                     _context,
                     graph,
                     file_name,
@@ -2124,6 +2263,60 @@ pub fn get_type_local(
                 }
             }
         }
+        Expression::Index((expr, index_expr, span)) => {
+            let (expr_type, typed_expr) =
+                get_type_local(_context, scope, graph, file_name, intermediate, expr);
+
+            let (index_expr_type, index_typed_expr) =
+                get_type_local(_context, scope, graph, file_name, intermediate, index_expr);
+
+            let expr_type = ExpandedType::from_string(graph, file_name, &expr_type);
+            let index_expr_type = ExpandedType::from_string(graph, file_name, &index_expr_type);
+
+            let (expr_symbol, expr_node) = check_type_local(
+                _context,
+                graph,
+                file_name,
+                &ast::Identifier {
+                    name: expr_type.name.clone(),
+                    span: expr.get_span(),
+                },
+            );
+
+            if let Some(expr_symbol) = expr_symbol {
+                let mut params = vec![expr_type, index_expr_type];
+                let (method_op, method_symbol) = check_method_local(
+                    _context,
+                    graph,
+                    file_name,
+                    span,
+                    expr_symbol,
+                    &params[0].generics,
+                    &"__index",
+                    &params,
+                );
+
+                (
+                    method_op.to_owned(),
+                    TypedExpression::Call(
+                        format!(
+                            "{}_method___index{}",
+                            expr_node.unwrap().get_namespaced(),
+                            if method_symbol.is_some() {
+                                method_symbol.unwrap().get_overload_name()
+                            } else {
+                                "".to_string()
+                            }
+                        ),
+                        vec![typed_expr, index_typed_expr],
+                        span.clone(),
+                    ),
+                )
+            } else {
+                ("!error".to_string(), TypedExpression::Error())
+            }
+        }
+
         Expression::List((exprs, span)) => {
             if exprs.len() == 0 {
                 _context.alerts.push(SpannedAlert::error(
@@ -3067,6 +3260,65 @@ impl ExpandedType {
 
         ExpandedType::new(graph, file_name, name, generics)
     }
+
+    pub fn from_string_raw(string: &str) -> Self {
+        let mut name = String::new();
+        let mut generics = vec![];
+        let mut generic = String::new();
+        let mut depth = 0;
+
+        for c in string.chars() {
+            if c == '<' {
+                depth += 1;
+                if depth == 1 {
+                    continue;
+                }
+            } else if c == '>' {
+                depth -= 1;
+                if depth == 0 {
+                    generics.push(ExpandedType::from_string_raw(&generic));
+                    generic = String::new();
+                    continue;
+                }
+            } else if c == ',' && depth == 1 {
+                generics.push(ExpandedType::from_string_raw(&generic));
+                generic = String::new();
+                continue;
+            }
+
+            if depth == 0 {
+                name.push(c);
+            } else {
+                generic.push(c);
+            }
+        }
+
+        Self {
+            name: name.clone(),
+            generics,
+            symbol_type: None,
+        }
+    }
+
+    pub fn to_safe_string(&self) -> String {
+        let mut string = self.name.clone();
+
+        if self.generics.len() > 0 {
+            string.push_str("___");
+
+            for (i, generic) in self.generics.iter().enumerate() {
+                if i > 0 {
+                    string.push_str("__");
+                }
+
+                string.push_str(generic.to_string().as_str());
+            }
+
+            string.push_str("___");
+        }
+
+        string
+    }
 }
 
 impl ToString for ExpandedType {
@@ -3231,6 +3483,97 @@ fn check_body_local(
                                             USizeTuple(id.span.start, id.span.end),
                                         ),
                                     ));
+                                }
+                            }
+                            Expression::Index((left, index_expr, span)) => {
+                                let (expr_type, typed_expr) = get_type_local(
+                                    _context,
+                                    scope,
+                                    graph,
+                                    file_name,
+                                    intermediate,
+                                    left,
+                                );
+
+                                let (index_expr_type, index_typed_expr) = get_type_local(
+                                    _context,
+                                    scope,
+                                    graph,
+                                    file_name,
+                                    intermediate,
+                                    index_expr,
+                                );
+
+                                let (set_to_expr_type, set_to_typed_expr) = get_type_local(
+                                    _context,
+                                    scope,
+                                    graph,
+                                    file_name,
+                                    intermediate,
+                                    b,
+                                );
+
+                                let expr_type =
+                                    ExpandedType::from_string(graph, file_name, &expr_type);
+                                let index_expr_type =
+                                    ExpandedType::from_string(graph, file_name, &index_expr_type);
+                                let set_to_expr_type =
+                                    ExpandedType::from_string(graph, file_name, &set_to_expr_type);
+
+                                let (expr_symbol, expr_node) = check_type_local(
+                                    _context,
+                                    graph,
+                                    file_name,
+                                    &ast::Identifier {
+                                        name: expr_type.name.clone(),
+                                        span: expr.get_span(),
+                                    },
+                                );
+
+                                if let Some(expr_symbol) = expr_symbol {
+                                    let mut params =
+                                        vec![expr_type.clone(), index_expr_type, set_to_expr_type];
+                                    // let (method_op, method_symbol) = check_method_local(
+                                    //     _context,
+                                    //     graph,
+                                    //     file_name,
+                                    //     &expr.get_span(),
+                                    //     expr_symbol,
+                                    //     &params[0].generics,
+                                    //     &"__index_set",
+                                    //     &params,
+                                    // );
+
+                                    if let Some((real_method_name, method_symbol)) = match_method(
+                                        _context,
+                                        scope,
+                                        graph,
+                                        file_name,
+                                        intermediate,
+                                        expr_symbol,
+                                        &expr_type,
+                                        &"__index_set",
+                                        &params,
+                                        &span,
+                                    ) {
+                                        typed_body.statements.push(TypedStatement::Expression(
+                                            TypedExpression::Call(
+                                                format!(
+                                                    "{}_method___index_set{}",
+                                                    expr_node.unwrap().get_namespaced(),
+                                                    method_symbol.get_overload_name()
+                                                ),
+                                                vec![
+                                                    typed_expr,
+                                                    index_typed_expr,
+                                                    set_to_typed_expr,
+                                                ],
+                                                span.clone(),
+                                            ),
+                                            span.clone(),
+                                        ));
+                                        continue;
+                                    }
                                 }
                             }
                             _ => {}
@@ -3702,7 +4045,9 @@ pub fn validate<'a>(
         let mut func_name_overload = String::new();
 
         for param in &function.parameters {
-            func_name_overload.push_str(&format!("_{}", param.1.as_ref().unwrap().name));
+            let expanded =
+                ExpandedType::from_string(graph, file_name, &param.1.as_ref().unwrap().name);
+            func_name_overload.push_str(&format!("_{}", expanded.to_safe_string()));
         }
         let func_name_out = format!("{}{}", func_name, func_name_overload);
 
@@ -3845,7 +4190,7 @@ pub fn validate<'a>(
                 }
                 !has_shader
             }
-            _ => false,
+            _ => true,
         })
         .collect::<Vec<&SymbolNode>>();
 
