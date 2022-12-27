@@ -5,8 +5,8 @@ use crate::graph::SymbolGraph;
 
 use crate::dep_graph::Graph;
 use crate::validator::{
-    TypedBody, TypedExpression, TypedIntermediate, TypedShaderDefinition, TypedStatement,
-    TypedValue,
+    ExpandedType, TypedBody, TypedExpression, TypedFunctionParameter, TypedIntermediate,
+    TypedShaderDefinition, TypedStatement, TypedTagType, TypedValue,
 };
 
 pub struct ProgramOutput {
@@ -33,6 +33,10 @@ fn translate_primitive_calls(func: &str, a: &str, b: &str, normal: String) -> St
         ("___operator_or", format!("{} || {}", a, b)),
         ("___prefix_operator_not", format!("!{}", a)),
         ("___prefix_operator_minus", format!("-{}", a)),
+        ("___prefix_operator_minus_minus", format!("--{}", a)),
+        ("___prefix_operator_join", format!("++{}", a)),
+        ("___postfix_operator_join", format!("{}++", a)),
+        ("___postfix_operator_minus_minus", format!("{}--", a)),
     ];
 
     for (op, result) in x {
@@ -61,6 +65,9 @@ fn is_primitive_op_func(func: &str) -> bool {
         "___operator_or",
         "___prefix_operator_not",
         "___prefix_operator_minus",
+        "___prefix_operator_join",
+        "___postfix_operator_join",
+        "___postfix_operator_minus_minus",
     ];
 
     for op in x {
@@ -85,7 +92,7 @@ pub fn translate_type(ty: &str) -> String {
         "uint3" => "uvec3".to_string(),
         "uint2" => "uvec2".to_string(),
         "uint" => "uint".to_string(),
-        _ => ty.to_string(),
+        _ => translate_identifier(&ty),
     }
 }
 
@@ -95,7 +102,13 @@ fn translate_identifier(id: &str) -> String {
             .replace("___", "_ii_")
             .replace("__", "_i_")
     } else {
-        id.to_owned().replace("___", "_ii_").replace("__", "_i_")
+        if id == "struct" {
+            "_i_struct".to_owned()
+        } else {
+            id.to_owned()
+        }
+        .replace("___", "_ii_")
+        .replace("__", "_i_")
     }
 }
 
@@ -166,6 +179,13 @@ fn gen_expression_local(
                 }
             }
 
+            if call.contains("primitives_array_method_len") {
+                return format!(
+                    "{}_size",
+                    gen_expression_local(graph, file_name, typed, &exprs[0])
+                );
+            }
+
             for arg in exprs {
                 args.push(gen_expression_local(graph, file_name, typed, arg));
             }
@@ -217,6 +237,27 @@ fn gen_expression_local(
                     .map(|(name, _)| format!("{}", name))
                     .collect::<Vec<String>>()
                     .join(", ")
+            )
+        }
+        TypedExpression::Assign(left, right, _) => {
+            format!(
+                "{} = {}",
+                gen_expression_local(graph, file_name, typed, left),
+                gen_expression_local(graph, file_name, typed, right)
+            )
+        }
+        TypedExpression::Access(expr, prop_name, _) => {
+            format!(
+                "{}.{}",
+                gen_expression_local(graph, file_name, typed, expr),
+                prop_name
+            )
+        }
+        TypedExpression::Index(expr, index_expr, _) => {
+            format!(
+                "{}[{}]",
+                gen_expression_local(graph, file_name, typed, expr),
+                gen_expression_local(graph, file_name, typed, index_expr)
             )
         }
     }
@@ -311,7 +352,7 @@ fn gen_statement_local(
             let mut out = String::new();
 
             out.push_str(&format!(
-                "for ({}; {}; {};) {{\n",
+                "for ({} {}; {}) {{\n",
                 gen_statement_local(graph, file_name, typed, init),
                 gen_expression_local(graph, file_name, typed, condition),
                 gen_expression_local(graph, file_name, typed, update)
@@ -392,13 +433,55 @@ fn gen_body_local(
     out
 }
 
+pub fn generate_uniform(param: &TypedFunctionParameter, is_global: bool) -> String {
+    let pname = param.name.replace("$", "");
+    format!(
+        "uniform {} {}{};\n",
+        if param.type_name.name == "array" {
+            format!(
+                "{}",
+                translate_type(&param.type_name.generics[0].to_string())
+            )
+        } else {
+            translate_type(&param.type_name.to_string())
+        },
+        translate_identifier(&if is_global {
+            format!("__in_global_{}", pname)
+        } else {
+            format!("__in_{}", pname)
+        }),
+        if param.type_name.name == "array" {
+            format!(
+                "[%{}{}_size%]",
+                if is_global { "global_" } else { "" },
+                pname
+            )
+        } else {
+            "".to_string()
+        }
+    ) + &if param.type_name.name == "array" {
+        format!(
+            "uniform int {}_size;\n",
+            translate_identifier(&if is_global {
+                format!("__in_global_{}", pname)
+            } else {
+                format!("__in_{}", pname)
+            })
+        )
+    } else {
+        "".to_owned()
+    }
+}
+
 pub fn generate(
     graph: &SymbolGraph,
     file_name: &str,
     shader: &TypedShaderDefinition,
     typed: &TypedIntermediate,
 ) -> ProgramOutput {
-    let mut webgl = String::new();
+    let mut webgl_main = String::new();
+    let mut webgl_uniforms = String::new();
+    let mut webgl_structs = String::new();
     // webgl.push_str("#version 300 es\n"); // We now do this on the js side
     let file = graph.files.get(file_name);
 
@@ -407,48 +490,52 @@ pub fn generate(
     for _struct in &typed.structs {
         let mut out = String::new();
 
-        out.push_str(&format!("struct {} {{\n", _struct.0));
+        out.push_str(&format!("struct {} {{\n", translate_type(&_struct.0)));
 
         for field in &_struct.1 {
-            out.push_str(&format!("{} {};\n", field.1, field.0));
+            out.push_str(&format!(
+                "{} {};\n",
+                translate_type(&field.1),
+                translate_type(&field.0)
+            ));
         }
 
-        out.push_str("\n}\n");
+        out.push_str("\n};\n");
 
         let mut props = _struct.1.clone();
         props.sort_by(|a, b| a.0.cmp(&b.0));
 
         let sorted_props = props
             .iter()
-            .map(|(name, ty)| format!("{} {}", ty, name))
+            .map(|(name, ty)| format!("{} {}", translate_type(ty), name))
             .collect::<Vec<String>>();
 
         out.push_str(&format!(
-            "{} __make_struct_{}({}) {{\n{} __struct;\n",
-            _struct.0,
-            _struct.0,
+            "{} _i_make_struct_{}({}) {{\n{} _i_struct;\n",
+            translate_identifier(&_struct.0),
+            translate_identifier(&_struct.0),
             sorted_props.join(", "),
-            _struct.0,
+            translate_identifier(&_struct.0),
         ));
 
         for field in &_struct.1 {
-            out.push_str(&format!("__struct.{} = {};\n", field.0, field.0));
+            out.push_str(&format!("_i_struct.{} = {};\n", field.0, field.0));
         }
 
-        out.push_str("\nreturn __struct;\n}\n");
+        out.push_str("\nreturn _i_struct;\n}\n");
 
         for field in &_struct.1 {
             out.push_str(&format!(
-                "{} __get_struct_{}_{}({} struct) {{\nreturn struct.{};\n}}\n",
+                "{} _i_get_struct_{}_{}({} _i_struct) {{\nreturn _i_struct.{};\n}}\n",
                 translate_type(&field.1),
-                _struct.0,
+                translate_identifier(&_struct.0),
                 field.0,
-                _struct.0,
+                translate_identifier(&_struct.0),
                 field.0
             ));
         }
 
-        webgl.push_str(&out);
+        webgl_structs.push_str(&out);
     }
 
     // Sort functions by dependence (In theory we should never have any recursive or co-dependent functions)
@@ -467,6 +554,15 @@ pub fn generate(
     let mut sorted_functions = depg.borrow_mut().topo_sort();
     for sorted_func in sorted_functions.iter_mut() {
         for func in &typed.functions {
+            if func
+                .1
+                .tags
+                .iter()
+                .find(|t| t.tag == TypedTagType::NoEmitWebgl && t.introduced_by.is_none())
+                .is_some()
+            {
+                continue;
+            }
             if sorted_func != func.0 {
                 continue;
             }
@@ -480,25 +576,24 @@ pub fn generate(
 
             if func.0 == "main" {
                 for param in &func.1.parameters {
-                    webgl = format!(
-                        "uniform {} {};\n",
-                        param.type_name.to_string(),
-                        translate_identifier(&format!("__in_{}", param.name.replace("$", "")))
-                    ) + &webgl;
+                    webgl_uniforms.push_str(&generate_uniform(param, false));
                 }
 
                 for param in &shader.globals {
-                    webgl = format!(
-                        "uniform {} {};\n",
-                        param.1.to_string(),
-                        translate_identifier(&format!("__in_global_{}", param.0.replace("$", "")))
-                    ) + &webgl;
+                    webgl_uniforms.push_str(&generate_uniform(
+                        &TypedFunctionParameter {
+                            default_value: None,
+                            type_name: ExpandedType::from_string(graph, file_name, param.1),
+                            name: param.0.clone(),
+                        },
+                        true,
+                    ));
                 }
 
-                webgl.push_str("/*__SHADEUP_TEMPLATE_INSERT_MAIN_BEFORE__*/\nvoid main() {\n/*__SHADEUP_TEMPLATE_INSERT_MAIN_START__*/\n");
+                webgl_main.push_str("/*__SHADEUP_TEMPLATE_INSERT_MAIN_BEFORE__*/\nvoid main() {\n/*__SHADEUP_TEMPLATE_INSERT_MAIN_START__*/\n");
             } else {
                 if func.1.tags.len() > 0 {
-                    webgl.push_str(&format!(
+                    webgl_main.push_str(&format!(
                         "/* {} */",
                         func.1
                             .tags
@@ -508,7 +603,7 @@ pub fn generate(
                             .join(" ")
                     ));
                 }
-                webgl.push_str(&format!(
+                webgl_main.push_str(&format!(
                     "{} {}({}) {{\n",
                     translate_type(func.1.return_type.to_string().as_str()),
                     translate_identifier(func.0),
@@ -526,7 +621,7 @@ pub fn generate(
             }
 
             if func.1.webgl.is_some() {
-                webgl.push_str(&func.1.webgl.as_ref().unwrap());
+                webgl_main.push_str(&func.1.webgl.as_ref().unwrap());
             } else {
                 let idents_temp = func.1.parameters.clone();
                 let idents = idents_temp
@@ -540,18 +635,20 @@ pub fn generate(
                 if func.0 == "main" {
                     rename_in_identifiers(&mut body_mut, &idents_refs);
                 }
-                webgl.push_str(&gen_body_local(graph, file_name, typed, &body_mut));
+                webgl_main.push_str(&gen_body_local(graph, file_name, typed, &body_mut));
             }
 
             if func.0 == "main" {
-                webgl.push_str("\n/*__SHADEUP_TEMPLATE_INSERT_MAIN_END__*/\n}\n");
+                webgl_main.push_str("\n/*__SHADEUP_TEMPLATE_INSERT_MAIN_END__*/\n}\n");
             } else {
-                webgl.push_str("}\n");
+                webgl_main.push_str("}\n");
             }
         }
     }
 
-    ProgramOutput { webgl }
+    ProgramOutput {
+        webgl: format!("{}\n\n{}\n\n{}", webgl_structs, webgl_uniforms, webgl_main),
+    }
 }
 
 fn rename_in_identifiers_expression(expr: &mut TypedExpression, idents: &Vec<&str>) {
@@ -573,6 +670,17 @@ fn rename_in_identifiers_expression(expr: &mut TypedExpression, idents: &Vec<&st
         }
         TypedExpression::Wrap(expr, _) => {
             rename_in_identifiers_expression(expr, idents);
+        }
+        TypedExpression::Access(expr, _, _) => {
+            rename_in_identifiers_expression(expr, idents);
+        }
+        TypedExpression::Assign(left, right, _) => {
+            rename_in_identifiers_expression(left, idents);
+            rename_in_identifiers_expression(right, idents);
+        }
+        TypedExpression::Index(expr, idx, _) => {
+            rename_in_identifiers_expression(expr, idents);
+            rename_in_identifiers_expression(idx, idents);
         }
         _ => {}
     };

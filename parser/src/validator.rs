@@ -93,27 +93,68 @@ pub struct TypedShaderDefinition {
 
 #[derive(Clone)]
 pub enum TypedExpression {
-    Call(String, Vec<TypedExpression>, Span),
-    Value(TypedValue, Span),
-    Identifier(String, Span),
-    KVMap(Vec<(String, TypedExpression)>, Span),
-    Shader(TypedShaderInstance, Span),
-    Wrap(Box<TypedExpression>, Span),
-    List(Vec<TypedExpression>, Span),
+    Call(String, Vec<TypedExpression>, TypedExpressionContext),
+    Value(TypedValue, TypedExpressionContext),
+    Identifier(String, TypedExpressionContext),
+    KVMap(Vec<(String, TypedExpression)>, TypedExpressionContext),
+    Shader(TypedShaderInstance, TypedExpressionContext),
+    Wrap(Box<TypedExpression>, TypedExpressionContext),
+    List(Vec<TypedExpression>, TypedExpressionContext),
+    Assign(
+        Box<TypedExpression>,
+        Box<TypedExpression>,
+        TypedExpressionContext,
+    ),
+    Access(Box<TypedExpression>, String, TypedExpressionContext),
+    Index(
+        Box<TypedExpression>,
+        Box<TypedExpression>,
+        TypedExpressionContext,
+    ),
     Error(),
+}
+
+#[derive(Clone)]
+pub struct TypedExpressionContext {
+    pub output_type: String,
+    pub span: Span,
+}
+
+impl TypedExpressionContext {
+    pub fn new(output_type: String, span: Span) -> TypedExpressionContext {
+        TypedExpressionContext { output_type, span }
+    }
 }
 
 impl TypedExpression {
     pub fn get_span(&self) -> Span {
         match self {
-            TypedExpression::Call(_, _, span) => span.clone(),
-            TypedExpression::Value(_, span) => span.clone(),
-            TypedExpression::Identifier(_, span) => span.clone(),
-            TypedExpression::KVMap(_, span) => span.clone(),
-            TypedExpression::Shader(_, span) => span.clone(),
-            TypedExpression::Wrap(_, span) => span.clone(),
+            TypedExpression::Call(_, _, ctx) => ctx.span.clone(),
+            TypedExpression::Value(_, ctx) => ctx.span.clone(),
+            TypedExpression::Identifier(_, ctx) => ctx.span.clone(),
+            TypedExpression::KVMap(_, ctx) => ctx.span.clone(),
+            TypedExpression::Shader(_, ctx) => ctx.span.clone(),
+            TypedExpression::Wrap(_, ctx) => ctx.span.clone(),
             TypedExpression::Error() => 0..0,
-            TypedExpression::List(_, span) => span.clone(),
+            TypedExpression::List(_, ctx) => ctx.span.clone(),
+            TypedExpression::Assign(_, _, ctx) => ctx.span.clone(),
+            TypedExpression::Access(_, _, ctx) => ctx.span.clone(),
+            TypedExpression::Index(_, _, ctx) => ctx.span.clone(),
+        }
+    }
+    pub fn get_context(&self) -> TypedExpressionContext {
+        match self {
+            TypedExpression::Call(_, _, ctx) => ctx.clone(),
+            TypedExpression::Value(_, ctx) => ctx.clone(),
+            TypedExpression::Identifier(_, ctx) => ctx.clone(),
+            TypedExpression::KVMap(_, ctx) => ctx.clone(),
+            TypedExpression::Shader(_, ctx) => ctx.clone(),
+            TypedExpression::Wrap(_, ctx) => ctx.clone(),
+            TypedExpression::Error() => TypedExpressionContext::new("void".to_string(), 0..0),
+            TypedExpression::List(_, ctx) => ctx.clone(),
+            TypedExpression::Assign(_, _, ctx) => ctx.clone(),
+            TypedExpression::Access(_, _, ctx) => ctx.clone(),
+            TypedExpression::Index(_, _, ctx) => ctx.clone(),
         }
     }
 
@@ -135,6 +176,15 @@ impl TypedExpression {
                 for expr in exprs {
                     expr.scan_calls(call);
                 }
+            }
+            TypedExpression::Assign(left, right, _) => {
+                left.scan_calls(call);
+                right.scan_calls(call);
+            }
+            TypedExpression::Access(expr, _, _) => expr.scan_calls(call),
+            TypedExpression::Index(expr, index_expr, _) => {
+                expr.scan_calls(call);
+                index_expr.scan_calls(call);
             }
         }
     }
@@ -278,6 +328,7 @@ pub enum TypedTagType {
     ShaderOnly,
     Recursive,
     Throws,
+    NoEmitWebgl,
     GlobalVariableAccess,
 }
 
@@ -291,6 +342,7 @@ impl ToString for TypedTagType {
             TypedTagType::Recursive => "recursive".to_string(),
             TypedTagType::Throws => "can except".to_string(),
             TypedTagType::GlobalVariableAccess => "global var access".to_string(),
+            TypedTagType::NoEmitWebgl => "no emit webgl".to_string(),
         }
     }
 }
@@ -411,7 +463,18 @@ fn shake_expression(
         }
         TypedExpression::Value(_, _) => {}
         TypedExpression::Identifier(_ident, _) => {}
-        TypedExpression::KVMap(_, _) => {}
+        TypedExpression::KVMap(exprs, _) => {
+            for e in exprs {
+                shake_expression(
+                    graph,
+                    scope,
+                    file_name,
+                    in_intermediate,
+                    out_intermediate,
+                    &e.1,
+                );
+            }
+        }
         TypedExpression::Shader(_, _span) => {}
         TypedExpression::Error() => {}
         TypedExpression::List(expr, _) => {
@@ -425,6 +488,52 @@ fn shake_expression(
                     e,
                 );
             }
+        }
+        TypedExpression::Assign(left, right, _) => {
+            shake_expression(
+                graph,
+                scope,
+                file_name,
+                in_intermediate,
+                out_intermediate,
+                left,
+            );
+            shake_expression(
+                graph,
+                scope,
+                file_name,
+                in_intermediate,
+                out_intermediate,
+                right,
+            );
+        }
+        TypedExpression::Access(expr, _, _) => {
+            shake_expression(
+                graph,
+                scope,
+                file_name,
+                in_intermediate,
+                out_intermediate,
+                expr,
+            );
+        }
+        TypedExpression::Index(expr, index_expr, _) => {
+            shake_expression(
+                graph,
+                scope,
+                file_name,
+                in_intermediate,
+                out_intermediate,
+                expr,
+            );
+            shake_expression(
+                graph,
+                scope,
+                file_name,
+                in_intermediate,
+                out_intermediate,
+                index_expr,
+            );
         }
     }
 }
@@ -791,9 +900,12 @@ fn check_type_local<'a>(
         return (Some(inner_wrap), primitive);
     }
 
-    let file = graph.files.get(file_name).unwrap();
+    let expanded = ExpandedType::from_string(graph, file_name, &name.name);
 
-    let symbol = file.get(&name.name);
+    let symbol_refs =
+        ExpandedType::get_symbol_refs(graph, file_name, expanded.name, expanded.generics.clone());
+    let symbol = symbol_refs.0;
+    let symbol_node = symbol_refs.1;
 
     if symbol.is_none() {
         _context.alerts.push(SpannedAlert::error(
@@ -812,26 +924,7 @@ fn check_type_local<'a>(
     }
 
     if symbol.is_some() {
-        let symbol = symbol.unwrap();
-
-        if let SymbolDefinition::Type(def_type) = &symbol.definition {
-            return (Some(def_type), Some(symbol));
-        } else {
-            _context.alerts.push(SpannedAlert::error(
-                "Expected a type".to_string(),
-                format!(
-                    "The symbol '{}' is not a type but a {}",
-                    name.name,
-                    symbol.definition.get_name()
-                ),
-                Location::new(
-                    file_name.to_string(),
-                    USizeTuple(name.span.start, name.span.end),
-                ),
-            ));
-
-            return (None, None);
-        }
+        return (symbol, symbol_node);
     }
 
     (None, None)
@@ -1315,11 +1408,11 @@ pub fn get_call_local(
         };
 
         (
-            out_type,
+            out_type.clone(),
             TypedExpression::Call(
                 format!("{}{}", func_name, param_types),
                 typed_args,
-                call.span.clone(),
+                TypedExpressionContext::new(out_type, call.span.clone()),
             ),
         )
     } else {
@@ -1338,12 +1431,14 @@ pub fn get_call_local(
                     &call.expression,
                 );
 
-                typed_args.push(self_typed);
-                args.push(ExpandedType::from_string(
-                    graph,
-                    file_name,
-                    &self_arg_type_string,
-                ));
+                if method_name.name != func_type.symbol.as_ref().unwrap().name {
+                    typed_args.push(self_typed);
+                    args.push(ExpandedType::from_string(
+                        graph,
+                        file_name,
+                        &self_arg_type_string,
+                    ));
+                }
 
                 for arg in &call.args {
                     let (arg_type_string, typed_arg) =
@@ -1365,16 +1460,13 @@ pub fn get_call_local(
                     &args,
                     &call.span,
                 ) {
-                    if real_method_name == "__construct" {
-                        typed_args.remove(0);
-                    }
-
+                    let out_type = method_symbol
+                        .return_type
+                        .as_ref()
+                        .unwrap_or(&"void".to_string())
+                        .clone();
                     (
-                        method_symbol
-                            .return_type
-                            .as_ref()
-                            .unwrap_or(&"void".to_string())
-                            .clone(),
+                        out_type.clone(),
                         TypedExpression::Call(
                             format!(
                                 "{}_method_{}{}",
@@ -1402,7 +1494,7 @@ pub fn get_call_local(
                                     param_type.wrap_cast(&args[i], x)
                                 })
                                 .collect(),
-                            call.span.clone(),
+                            TypedExpressionContext::new(out_type.clone(), call.span.clone()),
                         ),
                     )
                 } else {
@@ -1446,23 +1538,38 @@ pub fn get_type_local(
         ast::Expression::Value((value, _)) => match value {
             ast::Value::Int(ival) => (
                 "int".to_string(),
-                TypedExpression::Value(TypedValue::Int(ival.clone()), expr.get_span()),
+                TypedExpression::Value(
+                    TypedValue::Int(ival.clone()),
+                    TypedExpressionContext::new("int".to_string(), expr.get_span()),
+                ),
             ),
             ast::Value::Real(fval) => (
                 "float".to_string(),
-                TypedExpression::Value(TypedValue::Float(fval.clone()), expr.get_span()),
+                TypedExpression::Value(
+                    TypedValue::Float(fval.clone()),
+                    TypedExpressionContext::new("float".to_string(), expr.get_span()),
+                ),
             ),
             ast::Value::Str(sval) => (
                 "string".to_string(),
-                TypedExpression::Value(TypedValue::String(sval.clone()), expr.get_span()),
+                TypedExpression::Value(
+                    TypedValue::String(sval.clone()),
+                    TypedExpressionContext::new("string".to_string(), expr.get_span()),
+                ),
             ),
             ast::Value::Bool(bval) => (
                 "bool".to_string(),
-                TypedExpression::Value(TypedValue::Bool(bval.clone()), expr.get_span()),
+                TypedExpression::Value(
+                    TypedValue::Bool(bval.clone()),
+                    TypedExpressionContext::new("bool".to_string(), expr.get_span()),
+                ),
             ),
             ast::Value::Null => (
-                "null".to_string(),
-                TypedExpression::Value(TypedValue::Null, expr.get_span()),
+                "void".to_string(),
+                TypedExpression::Value(
+                    TypedValue::Null,
+                    TypedExpressionContext::new("void".to_string(), expr.get_span()),
+                ),
             ),
         },
         ast::Expression::Error(_) => ("!error".to_string(), TypedExpression::Error()),
@@ -1478,7 +1585,7 @@ pub fn get_type_local(
                 let scope_def = scope.get(&ident.name).unwrap();
 
                 (
-                    local_type,
+                    local_type.clone(),
                     TypedExpression::Identifier(
                         if scope_def.is_global {
                             format!(
@@ -1489,7 +1596,7 @@ pub fn get_type_local(
                         } else {
                             ident.name.clone()
                         },
-                        ident.span.clone(),
+                        TypedExpressionContext::new(local_type.clone(), ident.span.clone()),
                     ),
                 )
             } else {
@@ -1506,30 +1613,37 @@ pub fn get_type_local(
                                 ident.name.clone(),
                                 TypedExpression::Identifier(
                                     symbol.get_namespaced(),
-                                    ident.span.clone(),
+                                    TypedExpressionContext::new(
+                                        ident.name.clone(),
+                                        ident.span.clone(),
+                                    ),
                                 ),
                             )
                         }
 
                         SymbolDefinition::Function(func) => {
                             add_function_hint(_context, symbol, &ident.span);
+                            let out_type = format!(
+                                "function<{}{}>",
+                                func.return_type.clone().unwrap_or("void".to_owned()),
+                                func.parameters
+                                    .iter()
+                                    .map(|x| if x.2 {
+                                        format!(",__optional<{}>", x.1.clone())
+                                    } else {
+                                        format!(",{}", x.1.clone())
+                                    })
+                                    .collect::<Vec<String>>()
+                                    .join("")
+                            );
                             (
-                                format!(
-                                    "function<{}{}>",
-                                    func.return_type.clone().unwrap_or("void".to_owned()),
-                                    func.parameters
-                                        .iter()
-                                        .map(|x| if x.2 {
-                                            format!(",__optional<{}>", x.1.clone())
-                                        } else {
-                                            format!(",{}", x.1.clone())
-                                        })
-                                        .collect::<Vec<String>>()
-                                        .join("")
-                                ),
+                                out_type.clone(),
                                 TypedExpression::Identifier(
                                     format!("{}", symbol.get_namespaced()),
-                                    ident.span.clone(),
+                                    TypedExpressionContext::new(
+                                        out_type.clone(),
+                                        ident.span.clone(),
+                                    ),
                                 ),
                             )
                         }
@@ -1601,16 +1715,17 @@ pub fn get_type_local(
                                 .push(expanded.wrap_cast(&arg_types[i], arg_exprs[i].clone()));
                         }
                     }
+                    let out_type = matched_func
+                        .1
+                        .return_type
+                        .clone()
+                        .unwrap_or("void".to_owned());
                     return (
-                        matched_func
-                            .1
-                            .return_type
-                            .clone()
-                            .unwrap_or("void".to_owned()),
+                        out_type.clone(),
                         TypedExpression::Call(
                             format!("{}{}", matched_func.0, matched_func.1.get_overload_name()),
                             casted_args,
-                            call.span.clone(),
+                            TypedExpressionContext::new(out_type.clone(), call.span.clone()),
                         ),
                     );
                 }
@@ -1709,7 +1824,10 @@ pub fn get_type_local(
 
             (
                 "shader".to_owned(),
-                TypedExpression::Shader(shader_inst, block.span.clone()),
+                TypedExpression::Shader(
+                    shader_inst,
+                    TypedExpressionContext::new("shader".to_string(), block.span.clone()),
+                ),
             )
         }
         ast::Expression::StructInstance((ident, args, struct_span)) => {
@@ -1768,7 +1886,7 @@ pub fn get_type_local(
                         }
                     }
                     (
-                        ident.name.clone(),
+                        _type.real_name.clone(),
                         TypedExpression::Call(
                             format!("__make_struct_{}", symbol.get_namespaced()),
                             vec![TypedExpression::KVMap(
@@ -1803,9 +1921,15 @@ pub fn get_type_local(
                                         }
                                     })
                                     .collect(),
-                                ident.span.clone(),
+                                TypedExpressionContext::new(
+                                    _type.real_name.clone(),
+                                    ident.span.clone(),
+                                ),
                             )],
-                            ident.span.clone(),
+                            TypedExpressionContext::new(
+                                _type.real_name.clone(),
+                                ident.span.clone(),
+                            ),
                         ),
                     )
                 } else {
@@ -1832,10 +1956,10 @@ pub fn get_type_local(
             }
         }
         ast::Expression::Op((lhs, op, rhs, span)) => {
-            let (lhs_type, lhs_typed_expr) =
+            let (mut lhs_type, mut lhs_typed_expr) =
                 get_type_local(_context, scope, graph, file_name, intermediate, lhs);
 
-            let lhs_type = ExpandedType::from_string(graph, file_name, &lhs_type);
+            let mut lhs_type = ExpandedType::from_string(graph, file_name, &lhs_type);
 
             let lhs_symbol = if lhs_type.name == "!error" {
                 None
@@ -1851,6 +1975,48 @@ pub fn get_type_local(
                 )
                 .0
             };
+
+            if let Op::Eq = op {
+                let (rhs_type, rhs_typed_expr) =
+                    get_type_local(_context, scope, graph, file_name, intermediate, rhs);
+                let rhs_type = ExpandedType::from_string(graph, file_name, &rhs_type);
+                if let Some(lhs_symbol) = lhs_symbol {
+                    if let Some(rhs_symbol) = check_type_local(
+                        _context,
+                        graph,
+                        file_name,
+                        &ast::Identifier {
+                            name: rhs_type.name.clone(),
+                            span: rhs.get_span(),
+                        },
+                    )
+                    .0
+                    {
+                        if !lhs_type.is_compatible_with(&rhs_type) {
+                            _context.alerts.push(SpannedAlert::error(
+                                "Type mismatch".to_string(),
+                                format!(
+                                    "Cannot assign '{}' to '{}'",
+                                    rhs_type.to_string(),
+                                    lhs_type.to_string()
+                                ),
+                                Location::new(
+                                    file_name.to_string(),
+                                    USizeTuple(span.start, span.end),
+                                ),
+                            ));
+                        }
+                        return (
+                            "void".to_owned(),
+                            TypedExpression::Assign(
+                                Box::new(lhs_typed_expr),
+                                Box::new(lhs_type.wrap_cast(&rhs_type, rhs_typed_expr)),
+                                TypedExpressionContext::new("void".to_string(), span.clone()),
+                            ),
+                        );
+                    }
+                }
+            }
 
             if let Op::Dot = op {
                 if let Some(lhs_symbol) = lhs_symbol {
@@ -2136,7 +2302,7 @@ pub fn get_type_local(
                                 }
                             ),
                             vec![rhs_typed_expr],
-                            span.clone(),
+                            TypedExpressionContext::new(method_op.to_string(), span.clone()),
                         ),
                     )
                 } else {
@@ -2151,7 +2317,7 @@ pub fn get_type_local(
                 let (rhs_type, rhs_typed_expr) =
                     get_type_local(_context, scope, graph, file_name, intermediate, rhs);
                 let rhs_type = ExpandedType::from_string(graph, file_name, &rhs_type);
-                if let Some(lhs_symbol) = lhs_symbol {
+                if let Some(mut lhs_symbol) = lhs_symbol {
                     if let ast::Expression::Error((_, _)) = rhs.as_ref() {
                         let mut params = vec![lhs_type];
                         let (method_op, method_symbol) = check_method_local(
@@ -2191,10 +2357,28 @@ pub fn get_type_local(
                                     }
                                 ),
                                 vec![lhs_typed_expr, rhs_typed_expr],
-                                span.clone(),
+                                TypedExpressionContext::new(method_op.to_string(), span.clone()),
                             ),
                         )
                     } else {
+                        if (lhs_type.name == "int" || lhs_type.name == "uint")
+                            && rhs_type.name == "float"
+                        {
+                            // Convert lhs to float
+                            lhs_typed_expr = rhs_type.wrap_cast(&lhs_type, lhs_typed_expr);
+                            lhs_type = rhs_type.clone();
+                            lhs_symbol = check_type_local(
+                                _context,
+                                graph,
+                                file_name,
+                                &ast::Identifier {
+                                    name: rhs_type.name.clone(),
+                                    span: rhs.get_span(),
+                                },
+                            )
+                            .0
+                            .unwrap();
+                        }
                         let mut params = vec![lhs_type, rhs_type];
                         let (method_op, method_symbol) = check_method_local(
                             _context,
@@ -2249,7 +2433,7 @@ pub fn get_type_local(
                                     }
                                 ),
                                 vec![lhs_typed_expr, rhs_typed_expr_casted],
-                                span.clone(),
+                                TypedExpressionContext::new(method_op.to_string(), span.clone()),
                             ),
                         )
                     }
@@ -2298,18 +2482,10 @@ pub fn get_type_local(
 
                 (
                     method_op.to_owned(),
-                    TypedExpression::Call(
-                        format!(
-                            "{}_method___index{}",
-                            expr_node.unwrap().get_namespaced(),
-                            if method_symbol.is_some() {
-                                method_symbol.unwrap().get_overload_name()
-                            } else {
-                                "".to_string()
-                            }
-                        ),
-                        vec![typed_expr, index_typed_expr],
-                        span.clone(),
+                    TypedExpression::Index(
+                        Box::new(typed_expr),
+                        Box::new(index_typed_expr),
+                        TypedExpressionContext::new(method_op.to_string(), span.clone()),
                     ),
                 )
             } else {
@@ -2320,7 +2496,7 @@ pub fn get_type_local(
         Expression::List((exprs, span)) => {
             if exprs.len() == 0 {
                 _context.alerts.push(SpannedAlert::error(
-                    "Undefined vector".to_string(),
+                    "Undefined vector (use array<T>() instead)".to_string(),
                     format!("here"),
                     Location::new(
                         file_name.to_string(),
@@ -2331,9 +2507,13 @@ pub fn get_type_local(
             } else if exprs.len() == 1 {
                 let (expr_type, typed_expr) =
                     get_type_local(_context, scope, graph, file_name, intermediate, &exprs[0]);
+                let out_type = format!("array<{}>", expr_type);
                 (
-                    format!("array<{}>", expr_type),
-                    TypedExpression::List(vec![typed_expr], span.clone()),
+                    out_type.clone(),
+                    TypedExpression::List(
+                        vec![typed_expr],
+                        TypedExpressionContext::new(out_type.clone(), span.clone()),
+                    ),
                 )
             } else {
                 let mut types = vec![];
@@ -2360,9 +2540,13 @@ pub fn get_type_local(
                         }
                     }
                 }
+                let out_type = format!("array<{}>", type_name);
                 (
-                    format!("array<{}>", type_name),
-                    TypedExpression::List(typed_exprs, span.clone()),
+                    out_type.clone(),
+                    TypedExpression::List(
+                        typed_exprs,
+                        TypedExpressionContext::new(out_type.clone(), span.clone()),
+                    ),
                 )
             }
         }
@@ -2381,8 +2565,11 @@ pub fn get_type_local(
                 let (expr_type, typed_expr) =
                     get_type_local(_context, scope, graph, file_name, intermediate, &tup[0]);
                 (
-                    expr_type,
-                    TypedExpression::Wrap(Box::new(typed_expr), span.clone()),
+                    expr_type.clone(),
+                    TypedExpression::Wrap(
+                        Box::new(typed_expr),
+                        TypedExpressionContext::new(expr_type.clone(), span.clone()),
+                    ),
                 )
             } else {
                 let mut types = vec![];
@@ -2464,8 +2651,9 @@ pub fn get_type_local(
                     return ("!error".to_string(), TypedExpression::Error());
                 }
 
+                let out_type = format!("{}{}", types[0].name, types.len());
                 (
-                    format!("{}{}", types[0].name, types.len()),
+                    out_type.clone(),
                     TypedExpression::Call(
                         format!(
                             "primitives_{}{}_method___make_vec",
@@ -2473,7 +2661,7 @@ pub fn get_type_local(
                             types.len(),
                         ),
                         typed_exprs,
-                        span.clone(),
+                        TypedExpressionContext::new(out_type.clone(), span.clone()),
                     ),
                 )
             }
@@ -2568,7 +2756,21 @@ fn gen_cross_swizzle(
         intermediate.functions.insert(func_name.clone(), func);
     }
 
-    let func = TypedExpression::Call(func_name, params, expr.get_span().clone());
+    let out_type = format!(
+        "{}{}",
+        name,
+        if to_len == 1 {
+            "".to_string()
+        } else {
+            to_len.to_string()
+        }
+    );
+
+    let func = TypedExpression::Call(
+        func_name,
+        params,
+        TypedExpressionContext::new(out_type, expr.get_span().clone()),
+    );
 
     return func;
 }
@@ -2624,7 +2826,13 @@ fn gen_up_swizzle(
         intermediate.functions.insert(func_name.clone(), func);
     }
 
-    let func = TypedExpression::Call(func_name, params, expr.get_span().clone());
+    let out_type = format!("{}{}", name, len);
+
+    let func = TypedExpression::Call(
+        func_name,
+        params,
+        TypedExpressionContext::new(out_type, expr.get_span().clone()),
+    );
 
     return func;
 }
@@ -2646,37 +2854,34 @@ fn get_type_field_dot(
         add_type_field_hint(_context, lhs_symbol_node, &field.0, &field.1, span);
         return (
             field.1.clone(),
-            TypedExpression::Call(
-                format!(
-                    "__get_struct_{}_{}",
-                    lhs_symbol_node.get_namespaced(),
-                    field.0
-                ),
-                vec![lhs_typed_expr.clone()],
-                span.clone(),
+            TypedExpression::Access(
+                Box::new(lhs_typed_expr.clone()),
+                field.0.clone(),
+                TypedExpressionContext::new(field.1.clone(), span.clone()),
             ),
         );
     } else if let Some(ref method) = method {
         add_type_method_hint(_context, lhs_symbol_node, &method.0, &method.1, span);
+        let out_type = format!(
+            "function<{},{}>",
+            method.1.return_type.clone().unwrap_or("void".to_owned()),
+            method
+                .1
+                .parameters
+                .iter()
+                .map(|x| if x.2 {
+                    format!("__optional<{}>", x.1.clone())
+                } else {
+                    x.1.clone()
+                })
+                .collect::<Vec<String>>()
+                .join(",")
+        );
         return (
-            format!(
-                "function<{},{}>",
-                method.1.return_type.clone().unwrap_or("void".to_owned()),
-                method
-                    .1
-                    .parameters
-                    .iter()
-                    .map(|x| if x.2 {
-                        format!("__optional<{}>", x.1.clone())
-                    } else {
-                        x.1.clone()
-                    })
-                    .collect::<Vec<String>>()
-                    .join(",")
-            ),
+            out_type.clone(),
             TypedExpression::Identifier(
                 format!("__{}_{}", lhs_symbol_node.get_namespaced(), method.0),
-                span.clone(),
+                TypedExpressionContext::new(out_type.clone(), span.clone()),
             ),
         );
     } else {
@@ -2715,8 +2920,23 @@ fn build_shader_expression(
     typed_expression: &TypedExpression,
 ) {
     match typed_expression {
-        TypedExpression::Call(func_name, args, _) => {
+        TypedExpression::Call(func_name, args, ctx) => {
             shader_def.functions.insert(func_name.clone(), true);
+
+            if func_name.contains("primitives_array_method_len") {
+                // Check that we can statically call len on the array
+
+                let arg = &args[0];
+                if let TypedExpression::Identifier(ident, _) = arg {
+                    // ident.
+                } else {
+                    _context.alerts.push(SpannedAlert::error(
+                        "Length cannot be statically determined".to_string(),
+                        "This array cannot be statically sized, make sure you're accessing an identifier".to_string(),
+                        Location::new(file_name.to_string(), USizeTuple(ctx.span.start, ctx.span.end)),
+                    ));
+                }
+            }
 
             // We don't need to do this as we're now relying on tags to propagate global var access
             // if let Some(func) = intermediate.functions.get(func_name) {
@@ -2785,11 +3005,67 @@ fn build_shader_expression(
             }
         }
         TypedExpression::KVMap(_, _) => {}
-        TypedExpression::Shader(_, span) => _context.alerts.push(SpannedAlert::error(
+        TypedExpression::Shader(_, ctx) => _context.alerts.push(SpannedAlert::error(
             "Illegal shader def".to_string(),
             "Shaders cannot be defined inside other shaders".to_string(),
-            Location::new(file_name.to_string(), USizeTuple(span.start, span.end)),
+            Location::new(
+                file_name.to_string(),
+                USizeTuple(ctx.span.start, ctx.span.end),
+            ),
         )),
+        TypedExpression::Assign(left, right, _) => {
+            build_shader_expression(
+                _context,
+                graph,
+                scope,
+                shader_def,
+                file_name,
+                intermediate,
+                left,
+            );
+
+            build_shader_expression(
+                _context,
+                graph,
+                scope,
+                shader_def,
+                file_name,
+                intermediate,
+                right,
+            );
+        }
+        TypedExpression::Access(expr, _, _) => {
+            build_shader_expression(
+                _context,
+                graph,
+                scope,
+                shader_def,
+                file_name,
+                intermediate,
+                expr,
+            );
+        }
+        TypedExpression::Index(expr, index_expr, _) => {
+            build_shader_expression(
+                _context,
+                graph,
+                scope,
+                shader_def,
+                file_name,
+                intermediate,
+                expr,
+            );
+
+            build_shader_expression(
+                _context,
+                graph,
+                scope,
+                shader_def,
+                file_name,
+                intermediate,
+                index_expr,
+            );
+        }
         TypedExpression::Error() => {}
     }
 }
@@ -3053,56 +3329,78 @@ fn build_shader_definition(
 #[derive(Clone)]
 pub struct ExpandedType {
     pub name: String,
-    generics: Vec<ExpandedType>,
-    symbol_type: Option<SymbolType>,
+    pub generics: Vec<ExpandedType>,
+    pub symbol_type: Option<SymbolType>,
+    pub symbol: Option<SymbolNode>,
 }
 
 impl ExpandedType {
+    pub fn get_symbol_refs<'a>(
+        graph: &'a SymbolGraph,
+        file_name: &str,
+        name: String,
+        generics: Vec<ExpandedType>,
+    ) -> (Option<&'a SymbolType>, Option<&'a SymbolNode>) {
+        let symbol_type = || {
+            let primitive = graph.primitive.get(&name);
+
+            if primitive.is_some() {
+                let inner_wrap = if let SymbolDefinition::Type(ref symbol_type) =
+                    &primitive.unwrap().definition
+                {
+                    symbol_type
+                } else {
+                    unreachable!()
+                };
+                return (Some(inner_wrap), Some(primitive.unwrap()));
+            }
+
+            if let Some(file) = graph.files.get(file_name) {
+                let symbol = file.iter().find(|f| {
+                    if let SymbolDefinition::Type(_type) = &f.1.definition {
+                        return _type.real_name == name || f.1.name == name;
+                    } else {
+                        return false;
+                    }
+                });
+
+                if symbol.is_none() {
+                    return (None, None);
+                }
+
+                if symbol.is_some() {
+                    let symbol = symbol.unwrap().1;
+
+                    if let SymbolDefinition::Type(def_type) = &symbol.definition {
+                        return (Some(def_type), Some(symbol));
+                    } else {
+                        return (None, None);
+                    }
+                } else {
+                    return (None, None);
+                }
+            } else {
+                return (None, None);
+            }
+        };
+
+        return symbol_type();
+    }
+
     pub fn new(
         graph: &SymbolGraph,
         file_name: &str,
         name: String,
         generics: Vec<ExpandedType>,
     ) -> Self {
-        let symbol_type = || {
-            let primitive = graph.primitive.get(&name);
-
-            if primitive.is_some() {
-                let inner_wrap = if let SymbolDefinition::Type(ref symbol_type) =
-                    primitive.unwrap().definition
-                {
-                    symbol_type.clone()
-                } else {
-                    unreachable!()
-                };
-                return Some(inner_wrap);
-            }
-
-            let file = graph.files.get(file_name).unwrap();
-
-            let symbol = file.get(&name);
-
-            if symbol.is_none() {
-                return None;
-            }
-
-            if symbol.is_some() {
-                let symbol = symbol.unwrap();
-
-                if let SymbolDefinition::Type(def_type) = &symbol.definition {
-                    return Some(def_type.clone());
-                } else {
-                    return None;
-                }
-            } else {
-                return None;
-            }
-        };
+        let (symbol_type, symbol) =
+            Self::get_symbol_refs(graph, file_name, name.clone(), generics.clone());
 
         Self {
             name: name.clone(),
             generics,
-            symbol_type: symbol_type(),
+            symbol_type: symbol_type.cloned(),
+            symbol: symbol.cloned(),
         }
     }
 
@@ -3193,13 +3491,14 @@ impl ExpandedType {
         let span = expr.get_span();
         if self.is_scalar() && other.is_scalar() {
             if other.name != self.name {
+                let ctx = expr.get_context();
                 return TypedExpression::Call(
                     format!(
                         "primitives_{}_method___cast_from_scalar_{}",
                         self.name, self.name
                     ),
                     vec![expr],
-                    span,
+                    ctx,
                 );
             } else {
                 return expr;
@@ -3209,13 +3508,14 @@ impl ExpandedType {
             || (self.is_vec(4) && other.is_vec(4))
         {
             if other.name != self.name {
+                let ctx = expr.get_context();
                 return TypedExpression::Call(
                     format!(
                         "primitives_{}_method___cast_from_vec_{}",
                         self.name, self.name
                     ),
                     vec![expr],
-                    span,
+                    ctx,
                 );
             } else {
                 return expr;
@@ -3297,6 +3597,7 @@ impl ExpandedType {
             name: name.clone(),
             generics,
             symbol_type: None,
+            symbol: None,
         }
     }
 
@@ -3371,7 +3672,10 @@ fn check_body_local(
                     ));
                 } else {
                     let mut _to_val = "void".to_owned();
-                    let mut _to_typed_expr = TypedExpression::Value(TypedValue::Null, 0..0);
+                    let mut _to_typed_expr = TypedExpression::Value(
+                        TypedValue::Null,
+                        TypedExpressionContext::new("void".to_string(), 0..0),
+                    );
                     if _let.to.is_some() {
                         (_to_val, _to_typed_expr) = get_type_local(
                             _context,
@@ -3420,17 +3724,97 @@ fn check_body_local(
                 }
             }
             ast::Root::Expression(expr) => {
-                match expr {
-                    Expression::Op((a, op, b, span)) => match op {
-                        Op::Eq => match a.as_ref() {
-                            Expression::Identifier((id, _)) => {
-                                if let Some(container_type) = scope.check(&id.name) {
-                                    let expanded_type = ExpandedType::from_string(
+                if false {
+                    match expr {
+                        Expression::Op((a, op, b, span)) => match op {
+                            Op::Eq => match a.as_ref() {
+                                Expression::Identifier((id, _)) => {
+                                    if let Some(container_type) = scope.check(&id.name) {
+                                        let expanded_type = ExpandedType::from_string(
+                                            graph,
+                                            file_name,
+                                            &container_type,
+                                        );
+                                        let (set_to_type, typed_expr) = get_type_local(
+                                            _context,
+                                            scope,
+                                            graph,
+                                            file_name,
+                                            intermediate,
+                                            b,
+                                        );
+
+                                        let set_to_expanded = ExpandedType::from_string(
+                                            graph,
+                                            file_name,
+                                            &set_to_type,
+                                        );
+
+                                        if !set_to_expanded.is_compatible_with(&expanded_type) {
+                                            _context.alerts.push(SpannedAlert::error(
+                                                "Type mismatch".to_string(),
+                                                format!(
+                                                    "Cannot assign '{}' to '{}'",
+                                                    set_to_expanded.to_string(),
+                                                    expanded_type.to_string()
+                                                ),
+                                                Location::new(
+                                                    file_name.to_string(),
+                                                    USizeTuple(span.start, span.end),
+                                                ),
+                                            ));
+                                        }
+
+                                        let scope_def = scope.get(&id.name).unwrap();
+                                        let id_real_name = if scope_def.is_global {
+                                            format!(
+                                                "${}_{}",
+                                                crate::graph::translate_path_to_safe_name(
+                                                    file_name
+                                                ),
+                                                id.name
+                                            ) //We need to handle sets in shaders
+                                        } else {
+                                            id.name.clone()
+                                        };
+
+                                        typed_body.statements.push(TypedStatement::Set(
+                                            id_real_name,
+                                            expanded_type.wrap_cast(&set_to_expanded, typed_expr),
+                                            span.clone(),
+                                        ));
+                                        continue;
+                                    } else {
+                                        _context.alerts.push(SpannedAlert::error(
+                                            "Undefined variable".to_string(),
+                                            format!("'{}' is not defined in this scope", id.name),
+                                            Location::new(
+                                                file_name.to_string(),
+                                                USizeTuple(id.span.start, id.span.end),
+                                            ),
+                                        ));
+                                    }
+                                }
+                                Expression::Index((left, index_expr, span)) => {
+                                    let (expr_type, typed_expr) = get_type_local(
+                                        _context,
+                                        scope,
                                         graph,
                                         file_name,
-                                        &container_type,
+                                        intermediate,
+                                        left,
                                     );
-                                    let (set_to_type, typed_expr) = get_type_local(
+
+                                    let (index_expr_type, index_typed_expr) = get_type_local(
+                                        _context,
+                                        scope,
+                                        graph,
+                                        file_name,
+                                        intermediate,
+                                        index_expr,
+                                    );
+
+                                    let (set_to_expr_type, set_to_typed_expr) = get_type_local(
                                         _context,
                                         scope,
                                         graph,
@@ -3439,148 +3823,89 @@ fn check_body_local(
                                         b,
                                     );
 
-                                    let set_to_expanded =
-                                        ExpandedType::from_string(graph, file_name, &set_to_type);
-
-                                    if !set_to_expanded.is_compatible_with(&expanded_type) {
-                                        _context.alerts.push(SpannedAlert::error(
-                                            "Type mismatch".to_string(),
-                                            format!(
-                                                "Cannot assign '{}' to '{}'",
-                                                set_to_expanded.to_string(),
-                                                expanded_type.to_string()
-                                            ),
-                                            Location::new(
-                                                file_name.to_string(),
-                                                USizeTuple(span.start, span.end),
-                                            ),
-                                        ));
-                                    }
-
-                                    let scope_def = scope.get(&id.name).unwrap();
-                                    let id_real_name = if scope_def.is_global {
-                                        format!(
-                                            "${}_{}",
-                                            crate::graph::translate_path_to_safe_name(file_name),
-                                            id.name
-                                        ) //We need to handle sets in shaders
-                                    } else {
-                                        id.name.clone()
-                                    };
-
-                                    typed_body.statements.push(TypedStatement::Set(
-                                        id_real_name,
-                                        expanded_type.wrap_cast(&set_to_expanded, typed_expr),
-                                        span.clone(),
-                                    ));
-                                    continue;
-                                } else {
-                                    _context.alerts.push(SpannedAlert::error(
-                                        "Undefined variable".to_string(),
-                                        format!("'{}' is not defined in this scope", id.name),
-                                        Location::new(
-                                            file_name.to_string(),
-                                            USizeTuple(id.span.start, id.span.end),
-                                        ),
-                                    ));
-                                }
-                            }
-                            Expression::Index((left, index_expr, span)) => {
-                                let (expr_type, typed_expr) = get_type_local(
-                                    _context,
-                                    scope,
-                                    graph,
-                                    file_name,
-                                    intermediate,
-                                    left,
-                                );
-
-                                let (index_expr_type, index_typed_expr) = get_type_local(
-                                    _context,
-                                    scope,
-                                    graph,
-                                    file_name,
-                                    intermediate,
-                                    index_expr,
-                                );
-
-                                let (set_to_expr_type, set_to_typed_expr) = get_type_local(
-                                    _context,
-                                    scope,
-                                    graph,
-                                    file_name,
-                                    intermediate,
-                                    b,
-                                );
-
-                                let expr_type =
-                                    ExpandedType::from_string(graph, file_name, &expr_type);
-                                let index_expr_type =
-                                    ExpandedType::from_string(graph, file_name, &index_expr_type);
-                                let set_to_expr_type =
-                                    ExpandedType::from_string(graph, file_name, &set_to_expr_type);
-
-                                let (expr_symbol, expr_node) = check_type_local(
-                                    _context,
-                                    graph,
-                                    file_name,
-                                    &ast::Identifier {
-                                        name: expr_type.name.clone(),
-                                        span: expr.get_span(),
-                                    },
-                                );
-
-                                if let Some(expr_symbol) = expr_symbol {
-                                    let mut params =
-                                        vec![expr_type.clone(), index_expr_type, set_to_expr_type];
-                                    // let (method_op, method_symbol) = check_method_local(
-                                    //     _context,
-                                    //     graph,
-                                    //     file_name,
-                                    //     &expr.get_span(),
-                                    //     expr_symbol,
-                                    //     &params[0].generics,
-                                    //     &"__index_set",
-                                    //     &params,
-                                    // );
-
-                                    if let Some((real_method_name, method_symbol)) = match_method(
-                                        _context,
-                                        scope,
+                                    let expr_type =
+                                        ExpandedType::from_string(graph, file_name, &expr_type);
+                                    let index_expr_type = ExpandedType::from_string(
                                         graph,
                                         file_name,
-                                        intermediate,
-                                        expr_symbol,
-                                        &expr_type,
-                                        &"__index_set",
-                                        &params,
-                                        &span,
-                                    ) {
-                                        typed_body.statements.push(TypedStatement::Expression(
-                                            TypedExpression::Call(
-                                                format!(
-                                                    "{}_method___index_set{}",
-                                                    expr_node.unwrap().get_namespaced(),
-                                                    method_symbol.get_overload_name()
+                                        &index_expr_type,
+                                    );
+                                    let set_to_expr_type = ExpandedType::from_string(
+                                        graph,
+                                        file_name,
+                                        &set_to_expr_type,
+                                    );
+
+                                    let (expr_symbol, expr_node) = check_type_local(
+                                        _context,
+                                        graph,
+                                        file_name,
+                                        &ast::Identifier {
+                                            name: expr_type.name.clone(),
+                                            span: expr.get_span(),
+                                        },
+                                    );
+
+                                    if let Some(expr_symbol) = expr_symbol {
+                                        let mut params = vec![
+                                            expr_type.clone(),
+                                            index_expr_type,
+                                            set_to_expr_type,
+                                        ];
+                                        // let (method_op, method_symbol) = check_method_local(
+                                        //     _context,
+                                        //     graph,
+                                        //     file_name,
+                                        //     &expr.get_span(),
+                                        //     expr_symbol,
+                                        //     &params[0].generics,
+                                        //     &"__index_set",
+                                        //     &params,
+                                        // );
+
+                                        if let Some((real_method_name, method_symbol)) =
+                                            match_method(
+                                                _context,
+                                                scope,
+                                                graph,
+                                                file_name,
+                                                intermediate,
+                                                expr_symbol,
+                                                &expr_type,
+                                                &"__index_set",
+                                                &params,
+                                                &span,
+                                            )
+                                        {
+                                            typed_body.statements.push(TypedStatement::Expression(
+                                                TypedExpression::Call(
+                                                    format!(
+                                                        "{}_method___index_set{}",
+                                                        expr_node.unwrap().get_namespaced(),
+                                                        method_symbol.get_overload_name()
+                                                    ),
+                                                    vec![
+                                                        typed_expr,
+                                                        index_typed_expr,
+                                                        set_to_typed_expr,
+                                                    ],
+                                                    TypedExpressionContext::new(
+                                                        "void".to_string(),
+                                                        span.clone(),
+                                                    ),
                                                 ),
-                                                vec![
-                                                    typed_expr,
-                                                    index_typed_expr,
-                                                    set_to_typed_expr,
-                                                ],
                                                 span.clone(),
-                                            ),
-                                            span.clone(),
-                                        ));
-                                        continue;
+                                            ));
+                                            continue;
+                                        }
                                     }
                                 }
-                            }
+                                _ => {}
+                            },
                             _ => {}
                         },
-                        _ => {}
-                    },
-                    _ => (),
+                        _ => (),
+                    }
                 }
                 let (_, typed_expr) =
                     get_type_local(_context, scope, graph, file_name, intermediate, expr);
@@ -3962,8 +4287,15 @@ pub fn validate<'a>(
                     }
                 }
 
-                real_params.push((param.0.name.clone(), param_type.name.clone()));
-                check_type_local(_context, graph, file_name, &param_type);
+                let (_type, _type_node) = check_type_local(_context, graph, file_name, &param_type);
+
+                let type_name = if let Some(_type) = _type {
+                    _type.real_name.clone()
+                } else {
+                    param_type.name.clone()
+                };
+
+                real_params.push((param.0.name.clone(), type_name));
             } else {
                 if param.0.name == "self" {
                     if parent.is_none() {
@@ -3994,7 +4326,14 @@ pub fn validate<'a>(
         }
 
         let output = match function.return_type {
-            Some(ref _type) => ExpandedType::from_string(graph, file_name, &_type.name),
+            Some(ref _type) => {
+                let (_type, _type_node) = check_type_local(_context, graph, file_name, &_type);
+                if let Some(_type) = _type {
+                    ExpandedType::from_string(graph, file_name, &_type.real_name)
+                } else {
+                    ExpandedType::from_string(graph, file_name, "void")
+                }
+            }
             None => ExpandedType::from_string(graph, file_name, "void"),
         };
 
@@ -4004,10 +4343,10 @@ pub fn validate<'a>(
         if !func_name.ends_with("__init_file") {
             scope.parent = Some(Box::new(global_scope));
 
-            for param in real_params {
+            for param in &real_params {
                 scope.definitions.insert(
-                    param.0,
-                    ScopeVariableDefinition::new(param.1, function.span.clone()),
+                    param.0.clone(),
+                    ScopeVariableDefinition::new(param.1.clone(), function.span.clone()),
                 );
             }
 
@@ -4021,10 +4360,10 @@ pub fn validate<'a>(
                 &output,
             );
         } else {
-            for param in real_params {
+            for param in &real_params {
                 scope.definitions.insert(
-                    param.0,
-                    ScopeVariableDefinition::new(param.1, function.span.clone()),
+                    param.0.clone(),
+                    ScopeVariableDefinition::new(param.1.clone(), function.span.clone()),
                 );
             }
 
@@ -4061,7 +4400,8 @@ pub fn validate<'a>(
             parameters: function
                 .parameters
                 .iter()
-                .map(|(param, _type, expr)| TypedFunctionParameter {
+                .enumerate()
+                .map(|(i, (param, _type, expr))| TypedFunctionParameter {
                     name: param.name.clone(),
                     default_value: match expr {
                         Some(expr) => Some(
@@ -4085,11 +4425,7 @@ pub fn validate<'a>(
                     type_name: ExpandedType::from_string(
                         graph,
                         file_name,
-                        if _type.is_some() {
-                            &_type.as_ref().unwrap().name
-                        } else {
-                            "void"
-                        },
+                        real_params.get(i).unwrap().1.as_str(),
                     ),
                 })
                 .collect(),
@@ -4127,7 +4463,10 @@ pub fn validate<'a>(
                                 crate::graph::translate_path_to_safe_name(file_name),
                                 name
                             ),
-                            TypedExpression::Identifier(name.to_string(), 0..0),
+                            TypedExpression::Identifier(
+                                name.to_string(),
+                                TypedExpressionContext::new(def.type_name.clone(), 0..0),
+                            ),
                             0..0,
                         ));
 
@@ -4568,12 +4907,12 @@ pub fn propagate_tags_from_expression(
     let mut tags = vec![];
 
     match expr {
-        TypedExpression::Call(func_name, exprs, span) => {
+        TypedExpression::Call(func_name, exprs, ctx) => {
             if let Some(_) = intermediate.functions.get(func_name) {
                 tag_function(intermediate, func_name);
 
                 let func = intermediate.functions.get(func_name).unwrap();
-                tags.append(&mut retag(func_name, span, &mut func.tags.clone()));
+                tags.append(&mut retag(func_name, &ctx.span, &mut func.tags.clone()));
 
                 for expr in exprs {
                     tags.append(&mut propagate_tags_from_expression(intermediate, expr));
@@ -4582,11 +4921,11 @@ pub fn propagate_tags_from_expression(
         }
         TypedExpression::Wrap(_, _) => {}
         TypedExpression::Value(_, _) => {}
-        TypedExpression::Identifier(ident, span) => {
+        TypedExpression::Identifier(ident, ctx) => {
             if ident.starts_with("$") {
                 tags.push(TypedTag {
                     tag: TypedTagType::GlobalVariableAccess,
-                    span: span.clone(),
+                    span: ctx.span.clone(),
                     name: ident.to_owned(),
                     type_name: ident.replace("$", "").to_owned(),
                     introduced_by: None,
@@ -4599,6 +4938,20 @@ pub fn propagate_tags_from_expression(
             for expr in exprs {
                 tags.append(&mut propagate_tags_from_expression(intermediate, expr));
             }
+        }
+        TypedExpression::Assign(left, right, _) => {
+            tags.append(&mut propagate_tags_from_expression(intermediate, left));
+            tags.append(&mut propagate_tags_from_expression(intermediate, right));
+        }
+        TypedExpression::Access(expr, _, _) => {
+            tags.append(&mut propagate_tags_from_expression(intermediate, expr));
+        }
+        TypedExpression::Index(expr, index_expr, _) => {
+            tags.append(&mut propagate_tags_from_expression(intermediate, expr));
+            tags.append(&mut propagate_tags_from_expression(
+                intermediate,
+                index_expr,
+            ));
         }
         TypedExpression::Error() => {}
     }

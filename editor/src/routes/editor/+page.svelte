@@ -20,16 +20,21 @@
 	onMount(async () => {
 		env = await makeEnvironment(
 			`
-import invert from "test.shadeup";
+let g = [1, 2, 3];
 
-let g = 0.01;
+struct Light {
+	pos: float3,
+	color: float3,
+}
 
 fn main() {
-    g = g + 0.01;
-    if (g > 1) { g = 0; }
-	let y = 123;
+  let l = Light {
+		pos: (1, 2, 3),
+		color: (1, 1, 1),
+	};
+	
 	let x = shader {
-		pixel = (invert(g), 1, 2, 3);
+		pixel = (l.color.x, 1, 0, 1);
 	};
 
 	draw(x);

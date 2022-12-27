@@ -701,246 +701,258 @@ fn block_parser() -> impl Parser<Token, Vec<ast::Root>, Error = Simple<Token>> +
                 }),
             });
 
-        let expression =
-            recursive(|expr| {
-                let val = select! {
-                    Token::Null => Value::Null,
-                    Token::Bool(x) => Value::Bool(x),
-                    Token::Int(x) => Value::Int(x),
-                    Token::Real(n) => {
-                        let has_exponent = n.chars().any(|c| c == 'e' || c == 'E');
-                        let lower = n.to_lowercase();
-                        let split = lower.split('e').collect::<Vec<_>>();
-                        let (mantissa, exponent) = if split.len() == 2 {
-                            (split[0], split[1])
-                        } else {
-                            (n.as_str(), "0")
-                        };
+        let expression = recursive(|expr| {
+            let val = select! {
+                Token::Null => Value::Null,
+                Token::Bool(x) => Value::Bool(x),
+                Token::Int(x) => Value::Int(x),
+                Token::Real(n) => {
+                    let has_exponent = n.chars().any(|c| c == 'e' || c == 'E');
+                    let lower = n.to_lowercase();
+                    let split = lower.split('e').collect::<Vec<_>>();
+                    let (mantissa, exponent) = if split.len() == 2 {
+                        (split[0], split[1])
+                    } else {
+                        (n.as_str(), "0")
+                    };
 
-                        let mantissa = mantissa.parse::<f64>().unwrap();
-                        let exponent = exponent.parse::<i32>().unwrap();
+                    let mantissa = mantissa.parse::<f64>().unwrap();
+                    let exponent = exponent.parse::<i32>().unwrap();
 
-                        Value::Real(mantissa * 10f64.powi(exponent))
-                    },
-                    Token::Str(s) => Value::Str(s),
-                }
-                .labelled("value");
+                    Value::Real(mantissa * 10f64.powi(exponent))
+                },
+                Token::Str(s) => Value::Str(s),
+            }
+            .labelled("value");
 
-                // A list of expressions
-                let items = expr
-                    .clone()
-                    .separated_by(just(Token::Ctrl(',')))
-                    .allow_trailing();
+            // A list of expressions
+            let items = expr
+                .clone()
+                .separated_by(just(Token::Ctrl(',')))
+                .allow_trailing();
 
-                let list = items
-                    .clone()
-                    .delimited_by(just(Token::Ctrl('[')), just(Token::Ctrl(']')))
-                    .map_with_span(|list, span| ast::Expression::List((list, span)));
+            let list = items
+                .clone()
+                .delimited_by(just(Token::Ctrl('[')), just(Token::Ctrl(']')))
+                .map_with_span(|list, span| ast::Expression::List((list, span)));
 
-                let tuple = items
-                    .clone()
-                    .delimited_by(just(Token::Ctrl('(')), just(Token::Ctrl(')')))
-                    .map_with_span(|tuple, span| ast::Expression::Tuple((tuple, span)));
+            let tuple = items
+                .clone()
+                .delimited_by(just(Token::Ctrl('(')), just(Token::Ctrl(')')))
+                .map_with_span(|tuple, span| ast::Expression::Tuple((tuple, span)));
 
-                let struct_key_val_list = identifier
-                    .clone()
-                    .then_ignore(just(Token::Ctrl(':')))
-                    .then(expr.clone())
-                    .map(|(key, val)| (key, Box::new(val)))
-                    .separated_by(just(Token::Ctrl(',')))
-                    .allow_trailing();
+            let struct_key_val_list = identifier
+                .clone()
+                .then_ignore(just(Token::Ctrl(':')))
+                .then(expr.clone())
+                .map(|(key, val)| (key, Box::new(val)))
+                .separated_by(just(Token::Ctrl(',')))
+                .allow_trailing();
 
-                let struct_def = identifier
-                    .clone()
-                    .then(
-                        struct_key_val_list
-                            .clone()
-                            .delimited_by(just(Token::Ctrl('{')), just(Token::Ctrl('}'))),
-                    )
-                    .map_with_span(|(name, fields), span| {
-                        ast::Expression::StructInstance((name, fields, span))
-                    })
-                    .recover_with(nested_delimiters(
-                        Token::Ctrl('{'),
-                        Token::Ctrl('}'),
-                        [
-                            (Token::Ctrl('('), Token::Ctrl(')')),
-                            (Token::Ctrl('['), Token::Ctrl(']')),
-                        ],
-                        |span| ast::Expression::Error(((), span)),
-                    ));
-
-                // 'Atoms' are expressions that contain no ambiguity
-                let atom = val
-                    .map_with_span(|val, span| ast::Expression::Value((val, span)))
-                    .or(struct_def.clone())
-                    .or(identifier
+            let struct_def = identifier
+                .clone()
+                .then(
+                    struct_key_val_list
                         .clone()
-                        .map(|id| ast::Expression::Identifier((id.clone(), id.span))))
-                    .or(list)
-                    .or(tuple)
-                    .or(shader_or_main_block.clone().map_with_span(|block, span| {
-                        ast::Expression::InlineBlock((
-                            match block {
-                                ast::Root::Main(block) => block,
-                                ast::Root::Shader(block) => block,
-                                _ => unreachable!(),
-                            },
-                            span,
-                        ))
-                    }))
-                    // Atoms can also just be normal expressions, but surrounded with parentheses
-                    .or(expr
-                        .clone()
-                        .delimited_by(just(Token::Ctrl('(')), just(Token::Ctrl(')'))))
-                    // Attempt to recover anything that looks like a parenthesised expression but contains errors
-                    .recover_with(nested_delimiters(
-                        Token::Ctrl('('),
-                        Token::Ctrl(')'),
-                        [
-                            (Token::Ctrl('['), Token::Ctrl(']')),
-                            (Token::Ctrl('{'), Token::Ctrl('}')),
-                        ],
-                        |span| ast::Expression::Error(((), span)),
-                    ))
-                    // Attempt to recover anything that looks like a list but contains errors
-                    .recover_with(nested_delimiters(
-                        Token::Ctrl('['),
-                        Token::Ctrl(']'),
-                        [
-                            (Token::Ctrl('('), Token::Ctrl(')')),
-                            (Token::Ctrl('{'), Token::Ctrl('}')),
-                        ],
-                        |span| ast::Expression::Error(((), span)),
-                    ));
+                        .delimited_by(just(Token::Ctrl('{')), just(Token::Ctrl('}'))),
+                )
+                .map_with_span(|(name, fields), span| {
+                    ast::Expression::StructInstance((name, fields, span))
+                })
+                .recover_with(nested_delimiters(
+                    Token::Ctrl('{'),
+                    Token::Ctrl('}'),
+                    [
+                        (Token::Ctrl('('), Token::Ctrl(')')),
+                        (Token::Ctrl('['), Token::Ctrl(']')),
+                    ],
+                    |span| ast::Expression::Error(((), span)),
+                ));
 
-                let unary_pre = just(Token::Op(Op::Sub))
-                    .to(Op::Sub)
-                    .or(just(Token::Op(Op::SubSub)).to(Op::SubSub))
-                    .or(just(Token::Op(Op::Join)).to(Op::Join))
-                    .or(just(Token::Op(Op::Not)).to(Op::Not))
-                    .or(just(Token::Op(Op::Tilda)).to(Op::Tilda))
-                    .then(atom.clone())
-                    .map_with_span(|(op, expr), span| {
-                        ast::Expression::Op((
-                            Box::new(ast::Expression::Error(((), span.clone()))),
-                            op,
-                            Box::new(expr),
-                            span,
-                        ))
-                    });
-
-                let op = just(Token::Op(Op::Dot)).to(Op::Dot);
-                let dot =
-                    unary_pre
-                        .clone()
-                        .then(
-                            op.clone()
-                                .then(unary_pre.clone().or_not().map_with_span(
-                                    |val, span| match val {
-                                        Some(val) => val,
-                                        None => ast::Expression::Error(((), span)),
-                                    },
-                                ))
-                                .repeated(),
-                        )
-                        .foldl(|a, (op, b)| {
-                            let span = a.get_span().start..b.get_span().end;
-                            ast::Expression::Op((Box::new(a), op, Box::new(b), span))
-                        });
-
-                // Function calls have very high precedence so we prioritise them
-                let ident_expr = struct_def.clone().or(identifier
+            // 'Atoms' are expressions that contain no ambiguity
+            let atom = val
+                .map_with_span(|val, span| ast::Expression::Value((val, span)))
+                .or(struct_def.clone())
+                .or(identifier
                     .clone()
-                    .map(|id| ast::Expression::Identifier((id.clone(), id.span))));
-                let call = ident_expr
-                    .clone()
-                    .then(
-                        items
-                            .clone()
-                            .delimited_by(just(Token::Ctrl('(')), just(Token::Ctrl(')')))
-                            .map_with_span(|args, span: Span| (args, span))
-                            .repeated(),
-                    )
-                    .foldl(|f, args| {
-                        let span = f.get_span().start..args.1.end;
-                        let ident_extract = match f {
-                            ast::Expression::Identifier((id, _)) => id,
+                    .map(|id| ast::Expression::Identifier((id.clone(), id.span))))
+                .or(list)
+                .or(tuple)
+                .or(shader_or_main_block.clone().map_with_span(|block, span| {
+                    ast::Expression::InlineBlock((
+                        match block {
+                            ast::Root::Main(block) => block,
+                            ast::Root::Shader(block) => block,
                             _ => unreachable!(),
-                        };
-                        ast::Expression::Call((
-                            ast::Call {
-                                args: args.0,
-                                expression: Box::new(ast::Expression::Error((
-                                    (),
-                                    ident_extract.span.clone(),
-                                ))),
-                                method: Some(ident_extract),
-                                span: span.clone(),
-                            },
-                            span,
-                        ))
-                    });
-
-                let op = just(Token::Op(Op::Dot)).to(Op::Dot);
-                let call_dot_chain = call
+                        },
+                        span,
+                    ))
+                }))
+                // Atoms can also just be normal expressions, but surrounded with parentheses
+                .or(expr
                     .clone()
-                    .or(unary_pre.clone())
-                    .or(atom.clone())
-                    .then(
-                        op.clone()
-                            .then(call.clone().or(ident_expr.clone()).or_not().map_with_span(
-                                |val, span| match val {
+                    .delimited_by(just(Token::Ctrl('(')), just(Token::Ctrl(')'))))
+                // Attempt to recover anything that looks like a parenthesised expression but contains errors
+                .recover_with(nested_delimiters(
+                    Token::Ctrl('('),
+                    Token::Ctrl(')'),
+                    [
+                        (Token::Ctrl('['), Token::Ctrl(']')),
+                        (Token::Ctrl('{'), Token::Ctrl('}')),
+                    ],
+                    |span| ast::Expression::Error(((), span)),
+                ))
+                // Attempt to recover anything that looks like a list but contains errors
+                .recover_with(nested_delimiters(
+                    Token::Ctrl('['),
+                    Token::Ctrl(']'),
+                    [
+                        (Token::Ctrl('('), Token::Ctrl(')')),
+                        (Token::Ctrl('{'), Token::Ctrl('}')),
+                    ],
+                    |span| ast::Expression::Error(((), span)),
+                ));
+
+            let unary_pre = just(Token::Op(Op::Sub))
+                .to(Op::Sub)
+                .or(just(Token::Op(Op::SubSub)).to(Op::SubSub))
+                .or(just(Token::Op(Op::Join)).to(Op::Join))
+                .or(just(Token::Op(Op::Not)).to(Op::Not))
+                .or(just(Token::Op(Op::Tilda)).to(Op::Tilda))
+                .then(atom.clone())
+                .map_with_span(|(op, expr), span| {
+                    ast::Expression::Op((
+                        Box::new(ast::Expression::Error(((), span.clone()))),
+                        op,
+                        Box::new(expr),
+                        span,
+                    ))
+                });
+
+            let op = just(Token::Op(Op::Dot)).to(Op::Dot);
+            let dot = unary_pre
+                .clone()
+                .then(
+                    op.clone()
+                        .then(
+                            unary_pre
+                                .clone()
+                                .or_not()
+                                .map_with_span(|val, span| match val {
                                     Some(val) => val,
                                     None => ast::Expression::Error(((), span)),
-                                },
-                            ))
-                            .repeated(),
-                    )
-                    .foldl(|a, (op, b)| {
-                        let span = a.get_span().start..b.get_span().end;
+                                }),
+                        )
+                        .repeated(),
+                )
+                .foldl(|a, (op, b)| {
+                    let span = a.get_span().start..b.get_span().end;
+                    ast::Expression::Op((Box::new(a), op, Box::new(b), span))
+                });
 
-                        match b {
-                            ast::Expression::Call(call) => ast::Expression::Call((
-                                ast::Call {
-                                    args: call.0.args,
-                                    expression: Box::new(a),
-                                    method: call.0.method,
-                                    span: call.1.clone(),
-                                },
-                                call.1,
-                            )),
-                            _ => ast::Expression::Op((Box::new(a), op, Box::new(b), span)),
-                        }
-                    });
-                // .map(|(a, b)| {
-                //     let span = a.get_span().start..b.last().unwrap().1.end;
-                //     b.into_iter().fold(a, |a, (op, b)| {
-                //         ast::Expression::Op((Box::new(a), op, Box::new(b), span))
-                //     })
-                // });
+            // Function calls have very high precedence so we prioritise them
+            let ident_expr = struct_def.clone().or(identifier
+                .clone()
+                .map(|id| ast::Expression::Identifier((id.clone(), id.span))));
+            let call = ident_expr
+                .clone()
+                .then(
+                    items
+                        .clone()
+                        .delimited_by(just(Token::Ctrl('(')), just(Token::Ctrl(')')))
+                        .map_with_span(|args, span: Span| (args, span))
+                        .repeated(),
+                )
+                .foldl(|f, args| {
+                    let span = f.get_span().start..args.1.end;
+                    let ident_extract = match f {
+                        ast::Expression::Identifier((id, _)) => id,
+                        _ => unreachable!(),
+                    };
+                    ast::Expression::Call((
+                        ast::Call {
+                            args: args.0,
+                            expression: Box::new(ast::Expression::Error((
+                                (),
+                                ident_extract.span.clone(),
+                            ))),
+                            method: Some(ident_extract),
+                            span: span.clone(),
+                        },
+                        span,
+                    ))
+                });
 
-                // let op = just(Token::Op(Op::Dot)).to(Op::Dot);
-                // let dot_call =
-                //     call.clone()
-                //         .then(
-                //             op.clone()
-                //                 .then(call.clone().or(atom.clone()).or_not().map_with_span(
-                //                     |val, span| match val {
-                //                         Some(val) => val,
-                //                         None => ast::Expression::Error(((), span)),
-                //                     },
-                //                 ))
-                //                 .repeated(),
-                //         )
-                //         .foldl(|a, (op, b)| {
-                //             let span = a.get_span().start..b.get_span().end;
-                //             ast::Expression::Op((Box::new(a), op, Box::new(b), span))
-                //         });
+            let op = just(Token::Op(Op::Dot)).to(Op::Dot);
+            let call_atom = call
+                .clone()
+                .or(unary_pre.clone())
+                .or(atom.clone())
+                .then(
+                    expr.delimited_by(just(Token::Ctrl('[')), just(Token::Ctrl(']')))
+                        .or_not(),
+                )
+                .map_with_span(|(expr, index), span| match index {
+                    Some(index) => ast::Expression::Index((Box::new(expr), Box::new(index), span)),
+                    None => expr,
+                });
 
-                let op = just(Token::Op(Op::Dot)).to(Op::Dot);
-                let dot_call = call
-                    .clone()
+            let call_dot_chain = call_atom
+                .clone()
+                .then(
+                    op.clone()
+                        .then(call.clone().or(ident_expr.clone()).or_not().map_with_span(
+                            |val, span| match val {
+                                Some(val) => val,
+                                None => ast::Expression::Error(((), span)),
+                            },
+                        ))
+                        .repeated(),
+                )
+                .foldl(|a, (op, b)| {
+                    let span = a.get_span().start..b.get_span().end;
+
+                    match b {
+                        ast::Expression::Call(call) => ast::Expression::Call((
+                            ast::Call {
+                                args: call.0.args,
+                                expression: Box::new(a),
+                                method: call.0.method,
+                                span: call.1.clone(),
+                            },
+                            call.1,
+                        )),
+                        _ => ast::Expression::Op((Box::new(a), op, Box::new(b), span)),
+                    }
+                });
+            // .map(|(a, b)| {
+            //     let span = a.get_span().start..b.last().unwrap().1.end;
+            //     b.into_iter().fold(a, |a, (op, b)| {
+            //         ast::Expression::Op((Box::new(a), op, Box::new(b), span))
+            //     })
+            // });
+
+            // let op = just(Token::Op(Op::Dot)).to(Op::Dot);
+            // let dot_call =
+            //     call.clone()
+            //         .then(
+            //             op.clone()
+            //                 .then(call.clone().or(atom.clone()).or_not().map_with_span(
+            //                     |val, span| match val {
+            //                         Some(val) => val,
+            //                         None => ast::Expression::Error(((), span)),
+            //                     },
+            //                 ))
+            //                 .repeated(),
+            //         )
+            //         .foldl(|a, (op, b)| {
+            //             let span = a.get_span().start..b.get_span().end;
+            //             ast::Expression::Op((Box::new(a), op, Box::new(b), span))
+            //         });
+
+            let op = just(Token::Op(Op::Dot)).to(Op::Dot);
+            let dot_call =
+                call.clone()
                     .then(
                         op.clone()
                             .then(call.clone().or(atom.clone()).or_not().map_with_span(
@@ -956,74 +968,74 @@ fn block_parser() -> impl Parser<Token, Vec<ast::Root>, Error = Simple<Token>> +
                         ast::Expression::Op((Box::new(a), op, Box::new(b), span))
                     });
 
-                let index = call_dot_chain
-                    .clone()
-                    .then(
-                        call_dot_chain
-                            .delimited_by(just(Token::Ctrl('[')), just(Token::Ctrl(']')))
-                            .or_not(),
-                    )
-                    .map_with_span(|(left, right), span| {
-                        if let Some(right) = right {
-                            ast::Expression::Index((Box::new(left), Box::new(right), span))
-                        } else {
-                            left
-                        }
-                    });
+            // let index = call_dot_chain
+            //     .clone()
+            //     .then(
+            //         call_dot_chain
+            //             .delimited_by(just(Token::Ctrl('[')), just(Token::Ctrl(']')))
+            //             .or_not(),
+            //     )
+            //     .map_with_span(|(left, right), span| {
+            //         if let Some(right) = right {
+            //             ast::Expression::Index((Box::new(left), Box::new(right), span))
+            //         } else {
+            //             left
+            //         }
+            //     });
 
-                let index_dot_chain = index
-                    .clone()
-                    .then(
-                        op.clone()
-                            .then(index.clone().or(atom.clone()).or_not().map_with_span(
-                                |val, span| match val {
-                                    Some(val) => val,
-                                    None => ast::Expression::Error(((), span)),
-                                },
-                            ))
-                            .repeated(),
-                    )
-                    .foldl(|a, (op, b)| {
-                        let span = a.get_span().start..b.get_span().end;
-                        ast::Expression::Op((Box::new(a), op, Box::new(b), span))
-                    });
-                let bar_bar = op_chain(index_dot_chain);
+            // let index_dot_chain = index
+            //     .clone()
+            //     .then(
+            //         op.clone()
+            //             .then(index.clone().or(atom.clone()).or_not().map_with_span(
+            //                 |val, span| match val {
+            //                     Some(val) => val,
+            //                     None => ast::Expression::Error(((), span)),
+            //                 },
+            //             ))
+            //             .repeated(),
+            //     )
+            //     .foldl(|a, (op, b)| {
+            //         let span = a.get_span().start..b.get_span().end;
+            //         ast::Expression::Op((Box::new(a), op, Box::new(b), span))
+            //     });
+            let bar_bar = op_chain(call_dot_chain);
 
-                // Sum ops (add and subtract) have equal precedence
+            // Sum ops (add and subtract) have equal precedence
 
-                // let op = just(Token::Op(Op::Question)).to(Op::Question);
-                // let ternary = compare
-                //     .clone()
-                //     .then(
-                //         op.ignore_then(compare.clone())
-                //             .then_ignore(just(Token::Ctrl(':')))
-                //             .then(compare.clone())
-                //             .repeated(),
-                //     )
-                //     .foldl(|a, (b, c)| {
-                //         let span = a.get_span().start..c.get_span().end;
-                //         ast::Expression::Ternary((Box::new(a), Box::new(b), Box::new(c), span.clone()))
-                //     });
-                // .map_with_span(|(a, tern), span| match tern {
-                //     Some((b, c)) => {
-                //         ast::Expression::Ternary((Box::new(a), Box::new(b), Box::new(c), span))
-                //     }
-                //     None => a,
-                // });
+            // let op = just(Token::Op(Op::Question)).to(Op::Question);
+            // let ternary = compare
+            //     .clone()
+            //     .then(
+            //         op.ignore_then(compare.clone())
+            //             .then_ignore(just(Token::Ctrl(':')))
+            //             .then(compare.clone())
+            //             .repeated(),
+            //     )
+            //     .foldl(|a, (b, c)| {
+            //         let span = a.get_span().start..c.get_span().end;
+            //         ast::Expression::Ternary((Box::new(a), Box::new(b), Box::new(c), span.clone()))
+            //     });
+            // .map_with_span(|(a, tern), span| match tern {
+            //     Some((b, c)) => {
+            //         ast::Expression::Ternary((Box::new(a), Box::new(b), Box::new(c), span))
+            //     }
+            //     None => a,
+            // });
 
-                // let ternary = compare
-                //     .clone()
-                //     .then(op.then(compare).repeated())
-                //     .foldl(|a, (op, b)| {
-                //         let span = a.get_span().start..b.get_span().end;
-                //         ast::Expression::Op((Box::new(a), op, Box::new(b), span))
-                //     });
+            // let ternary = compare
+            //     .clone()
+            //     .then(op.then(compare).repeated())
+            //     .foldl(|a, (op, b)| {
+            //         let span = a.get_span().start..b.get_span().end;
+            //         ast::Expression::Op((Box::new(a), op, Box::new(b), span))
+            //     });
 
-                // Ternary operator pushes us just past the stack size
-                let ternary = bar_bar;
+            // Ternary operator pushes us just past the stack size
+            let ternary = bar_bar;
 
-                ternary
-            });
+            ternary
+        });
 
         let args = identifier
             .clone()

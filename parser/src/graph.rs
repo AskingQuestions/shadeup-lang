@@ -62,6 +62,7 @@ impl SymbolFunction {
 
 #[derive(Clone)]
 pub struct SymbolType {
+    pub real_name: String,
     pub fields: Vec<(String, SymbolRef)>,
     pub methods: Vec<(String, SymbolFunction)>,
 }
@@ -147,12 +148,16 @@ impl SymbolGraph {
         file_name: &str,
         symbol_name: &str,
     ) -> Option<&SymbolNode> {
-        if let Some(node) = self
-            .files
-            .get(file_name)
-            .and_then(|file| file.get(symbol_name))
-        {
-            Some(node)
+        if let Some(node) = self.files.get(file_name).and_then(|file| {
+            file.iter().find(|f| {
+                if let SymbolDefinition::Type(ref _type) = f.1.definition {
+                    return f.0 == symbol_name || _type.real_name == symbol_name;
+                } else {
+                    return false;
+                }
+            })
+        }) {
+            Some(node.1)
         } else if let Some(node) = self.primitive.get(symbol_name) {
             Some(node)
         } else {
@@ -175,6 +180,7 @@ impl SymbolGraph {
                         name: $name.to_string(),
                         real_name: $name.to_string(),
                         definition: SymbolDefinition::Type(SymbolType {
+                            real_name: $name.to_string(),
                             fields: Vec::new(),
                             methods: $methods,
                         }),
@@ -194,6 +200,7 @@ impl SymbolGraph {
                 name: "ShaderVertexOutput".to_string(),
                 real_name: "ShaderVertexOutput".to_string(),
                 definition: SymbolDefinition::Type(SymbolType {
+                    real_name: "ShaderVertexOutput".to_string(),
                     fields: vec![
                         ("position".to_string(), "vec3".to_string()),
                         ("uv".to_string(), "vec2".to_string()),
@@ -222,6 +229,7 @@ impl SymbolGraph {
                 name: "ShaderContext".to_string(),
                 real_name: "ShaderContext".to_string(),
                 definition: SymbolDefinition::Type(SymbolType {
+                    real_name: "ShaderContext".to_string(),
                     fields: vec![
                         ("position".to_string(), "float3".to_string()),
                         ("uv".to_string(), "float2".to_string()),
@@ -1440,6 +1448,13 @@ impl SymbolGraph {
                         return_type: Some("int".to_string()),
                         javascript: Some(format!("return __this.length")),
                         webgl: Some(format!("/* !error */")),
+                        tags: vec![TypedTag {
+                            tag: TypedTagType::NoEmitWebgl,
+                            span: 0..0,
+                            name: "len".to_string(),
+                            introduced_by: None,
+                            type_name: "".to_string(),
+                        }],
                         ..Default::default()
                     },
                 ),
@@ -1532,6 +1547,11 @@ impl SymbolGraph {
                                 file: file_name.to_owned(),
                                 root: ast::Root::Struct(struct_.clone()),
                                 definition: SymbolDefinition::Type(SymbolType {
+                                    real_name: format!(
+                                        "{}_{}",
+                                        translate_path_to_safe_name(&file_name),
+                                        struct_.name.name.clone()
+                                    ),
                                     methods: Vec::new(),
                                     fields: struct_
                                         .fields

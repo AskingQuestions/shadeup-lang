@@ -55,7 +55,7 @@ fn gen_expression_local(
             format!("[{}]", args)
         }
         TypedExpression::Identifier(ident, _) => translate_identifier(file_name, &ident),
-        TypedExpression::Call(call, exprs, span) => {
+        TypedExpression::Call(call, exprs, ctx) => {
             let func = typed.get_function(call);
 
             if let Some(func) = func {
@@ -115,7 +115,10 @@ fn gen_expression_local(
                 }
 
                 if func.has_tag(&TypedTagType::Throws) {
-                    args = format!("['{}', {}, {}], {}", call, span.start, span.end, args);
+                    args = format!(
+                        "['{}', {}, {}], {}",
+                        call, ctx.span.start, ctx.span.end, args
+                    );
                 }
 
                 if args.len() > 0 {
@@ -175,6 +178,27 @@ fn gen_expression_local(
                 "__SHADERS[{}].instance({{{}}})",
                 inst.shader,
                 params.join(", ")
+            )
+        }
+        TypedExpression::Assign(left, right, _) => {
+            format!(
+                "{} = {}",
+                gen_expression_local(graph, file_name, typed, left),
+                gen_expression_local(graph, file_name, typed, right)
+            )
+        }
+        TypedExpression::Access(expr, prop_name, _) => {
+            format!(
+                "{}.{}",
+                gen_expression_local(graph, file_name, typed, expr),
+                prop_name
+            )
+        }
+        TypedExpression::Index(expr, index_expr, _) => {
+            format!(
+                "{}[{}]",
+                gen_expression_local(graph, file_name, typed, expr),
+                gen_expression_local(graph, file_name, typed, index_expr)
             )
         }
     }
@@ -422,6 +446,19 @@ pub fn generate(
 
     //     javascript.push_str(&out);
     // }
+
+    for _struct in &typed.structs {
+        javascript.push_str(&format!(
+            "__shadeup_register_struct('{}', {{{}}});\n",
+            _struct.0,
+            _struct
+                .1
+                .iter()
+                .map(|(field, type_name)| format!("{}: '{}'", field, type_name))
+                .collect::<Vec<String>>()
+                .join(", ")
+        ));
+    }
 
     for func in &typed.functions {
         if func.1.tags.len() > 0 {

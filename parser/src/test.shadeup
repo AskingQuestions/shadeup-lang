@@ -1,15 +1,27 @@
-struct Player {
-	name: string,
-	health: int
+
+let g = [1, 2, 3];
+
+struct Light {
+	pos: float3,
+	color: float3,
 }
 
 fn main() {
-	let p = Player{
-		name: "Player",
-		health: 100.2,
+    let l = Light {
+		pos: (1, 2, 3),
+		color: (1, 1, 1),
 	};
 
-	let v = [p];
+    let z = [l];
 
-	print(v[0].name);
+    let yy = z[0].color.x;
+
+	let x = shader {
+		z.len();
+		pixel = (0, 1, 0, 1);
+	};
+
+	let a = 1 * 1.2;
+
+	draw(x);
 }
