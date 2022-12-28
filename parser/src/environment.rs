@@ -305,6 +305,11 @@ impl Environment {
         for (_, overloads) in self.graph.primitive.iter_all() {
             for _type in overloads {
                 if let SymbolDefinition::Type(ref sym_type) = _type.definition {
+                    if sym_type.real_name == "ShaderOutput" || sym_type.real_name == "ShaderInput" {
+                        typed
+                            .structs
+                            .push((sym_type.real_name.clone(), sym_type.fields.clone()));
+                    }
                     for method in &sym_type.methods {
                         let func_typed = TypedFunction {
                             tagged: true,

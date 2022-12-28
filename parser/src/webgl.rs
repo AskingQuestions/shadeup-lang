@@ -79,6 +79,21 @@ fn is_primitive_op_func(func: &str) -> bool {
 }
 
 pub fn translate_type(ty: &str) -> String {
+    if ty.starts_with("array") {
+        let expanded = ExpandedType::from_string_raw(ty);
+        let size = if let Some(sub_gen) = expanded.generics.get(1) {
+            if sub_gen.name == "__suggest" {
+                sub_gen.generics[0].name.clone()
+            } else {
+                sub_gen.name.clone()
+            }
+        } else {
+            "0".to_string()
+        };
+
+        let inner = translate_type(expanded.generics[0].name.as_str());
+        return format!("{}[{}]", inner, size);
+    }
     match ty {
         "float4" => "vec4".to_string(),
         "float3" => "vec3".to_string(),
@@ -97,6 +112,12 @@ pub fn translate_type(ty: &str) -> String {
 }
 
 fn translate_identifier(id: &str) -> String {
+    if id == "out" {
+        return "_i_out".to_owned();
+    }
+    if id == "in" {
+        return "_i_in".to_owned();
+    }
     if id.starts_with("__") {
         format!("_i_{}", id.strip_prefix("__").unwrap_or(id))
             .replace("___", "_ii_")
@@ -137,7 +158,21 @@ fn gen_expression_local(
             TypedValue::Error => "/* !error value */".to_string(),
         },
         TypedExpression::Error() => "/* !error */".to_string(),
-        TypedExpression::List(exprs, _) => "/* !error */".to_string(),
+        TypedExpression::List(exprs, _) => {
+            let first = exprs.first().unwrap();
+            let mut result = format!(
+                "{}[{}]({})",
+                translate_type(&first.get_context().output_type),
+                exprs.len(),
+                exprs
+                    .iter()
+                    .map(|x| gen_expression_local(graph, file_name, typed, x))
+                    .collect::<Vec<String>>()
+                    .join(", ")
+            );
+
+            return result;
+        }
         TypedExpression::Identifier(ident, _) => {
             let id_clone = ident.clone().replace("$", "");
             if ident.starts_with("$") {
@@ -180,6 +215,15 @@ fn gen_expression_local(
             }
 
             if call.contains("primitives_array_method_len") {
+                let ctx = exprs[0].get_context();
+                let expanded = ExpandedType::from_string_raw(&ctx.output_type);
+                if expanded.generics.len() > 1 {
+                    if expanded.generics[1].name == "__suggest" {
+                        return format!("{}", expanded.generics[1].generics[0].name);
+                    } else {
+                        return format!("{}", expanded.generics[1].name);
+                    }
+                }
                 return format!(
                     "{}_size",
                     gen_expression_local(graph, file_name, typed, &exprs[0])

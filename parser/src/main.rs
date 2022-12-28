@@ -18,10 +18,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     env.set_file(
         "other.shadeup".to_owned(),
         "
-        let glob = 'Hi!';
-		let starter = 1.0;
-fn invert(val: float) -> float {return starter - val; }
-		fn get_global() -> string { return glob; }
     "
         .to_string(),
     );

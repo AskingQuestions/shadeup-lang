@@ -1465,6 +1465,11 @@ pub fn get_call_local(
                         .as_ref()
                         .unwrap_or(&"void".to_string())
                         .clone();
+
+                    if let Some(validate) = method_symbol.validate {
+                        let arg_refs = args.iter().map(|f| f).collect::<Vec<&ExpandedType>>();
+                        validate(_context, scope, graph, file_name, arg_refs, &call.span);
+                    }
                     (
                         out_type.clone(),
                         TypedExpression::Call(
@@ -1774,16 +1779,12 @@ pub fn get_type_local(
             let mut new_scope = Scope::new();
             new_scope.parent = Some(Box::new(scope));
             new_scope.definitions.insert(
-                "pixel".to_string(),
-                ScopeVariableDefinition::new("float4".to_string(), 0..0),
+                "in".to_string(),
+                ScopeVariableDefinition::new("ShaderInput".to_string(), 0..0),
             );
             new_scope.definitions.insert(
-                "context".to_string(),
-                ScopeVariableDefinition::new("ShaderContext".to_string(), 0..0),
-            );
-            new_scope.definitions.insert(
-                "vertex".to_string(),
-                ScopeVariableDefinition::new("ShaderVertexOutput".to_string(), 0..0),
+                "out".to_string(),
+                ScopeVariableDefinition::new("ShaderOutput".to_string(), 0..0),
             );
             new_scope.shader_barrier = true;
 
@@ -2507,7 +2508,7 @@ pub fn get_type_local(
             } else if exprs.len() == 1 {
                 let (expr_type, typed_expr) =
                     get_type_local(_context, scope, graph, file_name, intermediate, &exprs[0]);
-                let out_type = format!("array<{}>", expr_type);
+                let out_type = format!("array<{},__suggest<1>>", expr_type);
                 (
                     out_type.clone(),
                     TypedExpression::List(
@@ -2540,7 +2541,7 @@ pub fn get_type_local(
                         }
                     }
                 }
-                let out_type = format!("array<{}>", type_name);
+                let out_type = format!("array<{},__suggest<{}>>", type_name, types.len());
                 (
                     out_type.clone(),
                     TypedExpression::List(
@@ -2930,12 +2931,23 @@ fn build_shader_expression(
                 if let TypedExpression::Identifier(ident, _) = arg {
                     // ident.
                 } else {
-                    _context.alerts.push(SpannedAlert::error(
-                        "Length cannot be statically determined".to_string(),
-                        "This array cannot be statically sized, make sure you're accessing an identifier".to_string(),
-                        Location::new(file_name.to_string(), USizeTuple(ctx.span.start, ctx.span.end)),
-                    ));
+                    // _context.alerts.push(SpannedAlert::error(
+                    //     "Length cannot be statically determined".to_string(),
+                    //     "This array cannot be statically sized, make sure you're accessing an identifier".to_string(),
+                    //     Location::new(file_name.to_string(), USizeTuple(ctx.span.start, ctx.span.end)),
+                    // ));
                 }
+            }
+
+            if func_name.contains("primitives_array_method_push") {
+                _context.alerts.push(SpannedAlert::error(
+                    "Illegal resizing of static array".to_string(),
+                    "Shaders cannot push to arrays".to_string(),
+                    Location::new(
+                        file_name.to_string(),
+                        USizeTuple(ctx.span.start, ctx.span.end),
+                    ),
+                ));
             }
 
             // We don't need to do this as we're now relying on tags to propagate global var access
@@ -3472,6 +3484,25 @@ impl ExpandedType {
 
         if self.name != other.name {
             return false;
+        }
+
+        if self.name == "array" {
+            if (self.generics[0].name != "any" && other.generics[0].name != "any")
+                && self.generics[0].name != other.generics[0].name
+            {
+                return false;
+            }
+
+            if self.generics.len() == 2 && other.generics.len() == 2 {
+                if self.generics[1].name != other.generics[1].name
+                    && (other.generics[1].name != "__suggest"
+                        && self.generics[1].name != "__suggest")
+                {
+                    return false;
+                }
+            }
+
+            return true;
         }
 
         if self.generics.len() != other.generics.len() {

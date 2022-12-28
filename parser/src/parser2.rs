@@ -609,6 +609,7 @@ fn op_chain(
 fn block_parser() -> impl Parser<Token, Vec<ast::Root>, Error = Simple<Token>> + Clone {
     let ident = filter_map(|span, tok| match tok {
         Token::Ident(ident) => Ok(ident.clone()),
+        Token::In => Ok("in".to_string()),
         _ => Err(Simple::expected_input_found(span, Vec::new(), Some(tok))),
     });
 
@@ -624,6 +625,44 @@ fn block_parser() -> impl Parser<Token, Vec<ast::Root>, Error = Simple<Token>> +
         .clone()
         .labelled("identifier")
         .map_with_span(|ident, span| ast::Identifier { name: ident, span });
+
+    let type_identifier = recursive::<_, ast::Identifier, _, _, _>(|type_ident| {
+        let num_val = select! {
+            Token::Int(x) => Value::Int(x),
+        };
+        let num_ident = num_val.map_with_span(|i, span| ast::Identifier {
+            name: i.to_string(),
+            span,
+        });
+        identifier
+            .clone()
+            .then_ignore(just(Token::Op(Op::Less)))
+            .then(
+                type_ident
+                    .clone()
+                    .or(num_ident)
+                    .separated_by(just(Token::Ctrl(','))),
+            )
+            .then_ignore(just(Token::Op(Op::More)))
+            .map_with_span(|(ident, types), span| ast::Identifier {
+                name: format!(
+                    "{}<{}>",
+                    ident.name,
+                    types
+                        .iter()
+                        .map(|t| t.name.clone())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+                span,
+            })
+            .or(identifier
+                .clone()
+                .map_with_span(|ident, span| ast::Identifier {
+                    name: ident.name,
+                    span,
+                }))
+    });
 
     let import_as = identifier
         .clone()
@@ -1041,7 +1080,7 @@ fn block_parser() -> impl Parser<Token, Vec<ast::Root>, Error = Simple<Token>> +
             .clone()
             .then(
                 just(Token::Ctrl(':'))
-                    .ignore_then(identifier.clone())
+                    .ignore_then(type_identifier.clone())
                     .or_not(),
             )
             .then(
@@ -1109,7 +1148,7 @@ fn block_parser() -> impl Parser<Token, Vec<ast::Root>, Error = Simple<Token>> +
         let let_start = identifier
             .labelled("let identifier")
             .then_ignore(just(Token::Ctrl(':')))
-            .then(identifier.clone())
+            .then(type_identifier.clone())
             .map(|(id, ty)| (id, Some(ty)))
             .or(identifier.labelled("let identifier").map(|id| (id, None)));
 

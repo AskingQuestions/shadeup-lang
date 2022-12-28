@@ -1,27 +1,14 @@
 
-let g = [1, 2, 3];
+let g: array<int, 3>  = [1, 2, 3];
 
-struct Light {
-	pos: float3,
-	color: float3,
-}
 
 fn main() {
-    let l = Light {
-		pos: (1, 2, 3),
-		color: (1, 1, 1),
-	};
-
-    let z = [l];
-
-    let yy = z[0].color.x;
+    
+		g.push(1);
 
 	let x = shader {
-		z.len();
-		pixel = (0, 1, 0, 1);
+		let y = [0, 2, 3];
+		let z = y.len();
+		out.color = (g[0], 0.0, 0.0, 0.0);
 	};
-
-	let a = 1 * 1.2;
-
-	draw(x);
 }

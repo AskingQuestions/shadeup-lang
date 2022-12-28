@@ -202,9 +202,12 @@ class ShadeupShaderInstance {
 				);
 				base = base.replace(
 					'/*__SHADEUP_TEMPLATE_INSERT_MAIN_START__*/',
-					'vec4 pixel = vec4(0, 0, 0, 0);'
+					'ShaderOutput _i_out;\nShaderInput _i_in;\n_i_in.uv = gl_FragCoord.xy;'
 				);
-				base = base.replace('/*__SHADEUP_TEMPLATE_INSERT_MAIN_END__*/', '_i_gl_out_pixel = pixel;');
+				base = base.replace(
+					'/*__SHADEUP_TEMPLATE_INSERT_MAIN_END__*/',
+					'_i_gl_out_pixel = _i_out.color;'
+				);
 			}
 			let finalSource = `#version 300 es\nprecision mediump float;\n\n${base}`;
 			console.log(finalSource);

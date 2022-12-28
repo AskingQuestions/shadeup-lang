@@ -20,21 +20,9 @@
 	onMount(async () => {
 		env = await makeEnvironment(
 			`
-let g = [1, 2, 3];
-
-struct Light {
-	pos: float3,
-	color: float3,
-}
-
 fn main() {
-  let l = Light {
-		pos: (1, 2, 3),
-		color: (1, 1, 1),
-	};
-	
 	let x = shader {
-		pixel = (l.color.x, 1, 0, 1);
+		out.color = (in.uv.x, 1, 0, 1);
 	};
 
 	draw(x);

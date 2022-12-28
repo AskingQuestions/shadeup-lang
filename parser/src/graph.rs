@@ -4,7 +4,7 @@ use wasm_bindgen::prelude::*;
 
 use crate::ast::{self, Location, Span, USizeTuple};
 use crate::printer::SpannedAlert;
-use crate::validator::{ExpandedType, TypedTag, TypedTagType};
+use crate::validator::{ExpandedType, Scope, TypedTag, TypedTagType, ValidationContext};
 use multimap::MultiMap;
 use std::collections::HashMap;
 
@@ -21,6 +21,8 @@ pub struct SymbolFunction {
     pub span: Span,
     pub method_of: Option<String>,
     pub gen_overload: bool,
+    pub validate:
+        Option<fn(&mut ValidationContext, &Scope, &SymbolGraph, &str, Vec<&ExpandedType>, &Span)>,
 }
 
 impl Default for SymbolFunction {
@@ -35,6 +37,7 @@ impl Default for SymbolFunction {
             span: 0..0,
             method_of: None,
             gen_overload: true,
+            validate: None,
         }
     }
 }
@@ -193,25 +196,25 @@ impl SymbolGraph {
         }
 
         self.primitive.insert(
-            "ShaderVertexOutput".to_owned(),
+            "ShaderOutput".to_owned(),
             SymbolNode {
                 aliased: false,
                 imported: false,
-                name: "ShaderVertexOutput".to_string(),
-                real_name: "ShaderVertexOutput".to_string(),
+                name: "ShaderOutput".to_string(),
+                real_name: "ShaderOutput".to_string(),
                 definition: SymbolDefinition::Type(SymbolType {
-                    real_name: "ShaderVertexOutput".to_string(),
+                    real_name: "ShaderOutput".to_string(),
                     fields: vec![
-                        ("position".to_string(), "vec3".to_string()),
-                        ("uv".to_string(), "vec2".to_string()),
-                        ("uv1".to_string(), "vec2".to_string()),
-                        ("uv2".to_string(), "vec2".to_string()),
-                        ("uv3".to_string(), "vec2".to_string()),
-                        ("uv4".to_string(), "vec2".to_string()),
-                        ("uv5".to_string(), "vec2".to_string()),
-                        ("uv6".to_string(), "vec2".to_string()),
-                        ("uv7".to_string(), "vec2".to_string()),
-                        ("color".to_string(), "vec4".to_string()),
+                        ("position".to_string(), "float3".to_string()),
+                        ("uv".to_string(), "float2".to_string()),
+                        ("uv1".to_string(), "float2".to_string()),
+                        ("uv2".to_string(), "float2".to_string()),
+                        ("uv3".to_string(), "float2".to_string()),
+                        ("uv4".to_string(), "float2".to_string()),
+                        ("uv5".to_string(), "float2".to_string()),
+                        ("uv6".to_string(), "float2".to_string()),
+                        ("uv7".to_string(), "float2".to_string()),
+                        ("color".to_string(), "float4".to_string()),
                     ],
                     methods: Vec::new(),
                 }),
@@ -222,14 +225,14 @@ impl SymbolGraph {
         );
 
         self.primitive.insert(
-            "ShaderContext".to_owned(),
+            "ShaderInput".to_owned(),
             SymbolNode {
                 aliased: false,
                 imported: false,
-                name: "ShaderContext".to_string(),
-                real_name: "ShaderContext".to_string(),
+                name: "ShaderInput".to_string(),
+                real_name: "ShaderInput".to_string(),
                 definition: SymbolDefinition::Type(SymbolType {
-                    real_name: "ShaderContext".to_string(),
+                    real_name: "ShaderInput".to_string(),
                     fields: vec![
                         ("position".to_string(), "float3".to_string()),
                         ("uv".to_string(), "float2".to_string()),
@@ -564,6 +567,26 @@ impl SymbolGraph {
                     [
                         base_integer_methods(type_name.clone()),
                         vec![
+                            (
+                                "__construct".to_string(),
+                                SymbolFunction {
+                                    span: 0..0,
+                                    parameters: vec![
+                                        ("val".to_owned(), type_name.clone(), false),
+                                    ],
+                                    return_type: Some(type_name.clone()),
+                                    javascript: Some(format!(
+                                        "return val;"
+                                    )),
+                                    webgl: Some(format!(
+                                        "return {}(val);",
+                                        crate::webgl::translate_type(&type_name)
+                                    )),
+                                    tags: Vec::new(),
+                                    method_of: None,
+                                    ..Default::default()
+                                },
+                            ),
                             (
                                 "__operator_plus".to_string(),
                                 SymbolFunction {
@@ -1438,6 +1461,20 @@ impl SymbolGraph {
                         return_type: None,
                         javascript: Some(format!("__this.push(value);")),
                         webgl: Some(format!("/* !error */")),
+                        validate: Some(|_context, scope, graph, file_name, args, span| {
+                            if args[0].generics.len() == 2
+                                && args[0].generics[1].name != "__suggest"
+                            {
+                                _context.alerts.push(SpannedAlert::error(
+                                    "Illegal push to static array".to_string(),
+                                    format!("Statically sized arrays cannot be pushed to"),
+                                    Location::new(
+                                        file_name.to_string(),
+                                        USizeTuple(span.start, span.end),
+                                    ),
+                                ));
+                            }
+                        }),
                         ..Default::default()
                     },
                 ),
